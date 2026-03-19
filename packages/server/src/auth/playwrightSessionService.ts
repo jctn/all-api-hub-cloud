@@ -170,6 +170,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       const currentUrl = page.url()
       const currentHost = this.getUrlHostname(currentUrl)
 
+      await this.dismissCommonOverlays(page)
+
       const challengeMessage = await this.detectManualChallenge(page)
       if (challengeMessage) {
         return {
@@ -444,6 +446,33 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     return false
+  }
+
+  private async dismissCommonOverlays(page: Page): Promise<void> {
+    const selectors = [
+      "button[aria-label='close']",
+      ".semi-modal-close",
+      ".semi-modal-header button[aria-label='close']",
+      "button:has-text('关闭')",
+      "button:has-text('我知道了')",
+      "button:has-text('知道了')",
+    ]
+
+    for (const selector of selectors) {
+      const locator = page.locator(selector).first()
+      const count = await locator.count().catch(() => 0)
+      if (count === 0) {
+        continue
+      }
+
+      const visible = await locator.isVisible().catch(() => false)
+      if (!visible) {
+        continue
+      }
+
+      await locator.click({ timeout: 2_000 }).catch(() => undefined)
+      await page.waitForTimeout(300).catch(() => undefined)
+    }
   }
 
   private async fillFirst(

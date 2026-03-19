@@ -1,0 +1,42 @@
+{
+  "anyrouter.top": {
+    "loginPath": "/login",
+    "loginButtonSelectors": [
+      "button:has-text('使用 LinuxDO 继续')",
+      "button:has-text('使用 GitHub 继续')",
+      "text=使用 LinuxDO 继续",
+      "text=使用 GitHub 继续"
+    ],
+    "successUrlPatterns": [
+      "/token",
+      "/dashboard",
+      "/panel",
+      "/console"
+    ],
+    "tokenStorageKeys": [
+      "access_token",
+      "token",
+      "authorization"
+    ],
+    "postLoginSelectors": []
+  },
+  "api.ouu.ch": {
+    "loginPath": "/login",
+    "loginButtonSelectors": [
+      "button:has-text('使用 LinuxDO 继续')",
+      "text=使用 LinuxDO 继续"
+    ],
+    "successUrlPatterns": [
+      "/token",
+      "/dashboard",
+      "/panel",
+      "/console"
+    ],
+    "tokenStorageKeys": [
+      "access_token",
+      "token",
+      "authorization"
+    ],
+    "postLoginSelectors": []
+  }
+}
