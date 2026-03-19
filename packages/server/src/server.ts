@@ -9,7 +9,11 @@ import { Pool } from "pg"
 
 import { PlaywrightSiteSessionService } from "./auth/playwrightSessionService.js"
 import { CheckinOrchestrator } from "./checkin/orchestrator.js"
-import { loadServerConfig, type ServerConfig } from "./config.js"
+import {
+  loadServerConfig,
+  resolveServerConfig,
+  type ServerConfig,
+} from "./config.js"
 import { GitHubBackupImporter } from "./importing/githubRepoImporter.js"
 import { BusyTaskError, TaskCoordinator } from "./taskCoordinator.js"
 import { createTelegramBot } from "./telegram/bot.js"
@@ -41,8 +45,11 @@ function parseBearerToken(header: string | undefined): string {
 export async function buildServer(
   options: BuildServerOptions = {},
 ): Promise<FastifyInstance> {
-  const config = options.config ?? loadServerConfig()
   const fetchImpl = options.fetchImpl ?? fetch
+  const config = await resolveServerConfig(
+    options.config ?? loadServerConfig(),
+    fetchImpl,
+  )
   let repository = options.repository
   let taskCoordinator = options.taskCoordinator
   let storageMode = "filesystem"

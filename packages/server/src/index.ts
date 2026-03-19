@@ -1,10 +1,10 @@
 import { fileURLToPath } from "node:url"
 
-import { loadServerConfig } from "./config.js"
+import { loadServerConfig, resolveServerConfig } from "./config.js"
 import { buildServer } from "./server.js"
 
 async function main() {
-  const config = loadServerConfig()
+  const config = await resolveServerConfig(loadServerConfig())
   const server = await buildServer({ config })
   const address = await server.listen({
     host: "0.0.0.0",

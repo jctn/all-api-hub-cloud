@@ -143,6 +143,7 @@ TZ=Asia/Shanghai
 - `/data/all-api-hub/diagnostics` 继续保存截图和诊断文件
 - 容器内如果使用系统 Chromium，请设置 `CHROMIUM_PATH=/usr/bin/chromium`
 - `SITE_LOGIN_PROFILES_JSON` 首轮部署可以先填 `{}`，这样服务可正常启动，只是暂不启用站点自动续期
+- 更推荐把 `site-login-profiles.json` 放进私有数据仓库，再通过 `SITE_LOGIN_PROFILES_REPO_PATH` 在启动时自动加载
 - 当前仓库默认导入源推荐使用 `jctn/all-api-hub-cloud` 的 `all-api-hub-backup-2026-03-19.json@main`
 - 仓库根目录的 `tmp-import.json` 只是烟测样例，不建议作为正式导入源
 
@@ -151,7 +152,7 @@ TZ=Asia/Shanghai
 - Secret:
   `DATABASE_URL` 或 `POSTGRES_CONNECTION_STRING`、`TG_BOT_TOKEN`、`TG_WEBHOOK_SECRET`、`TG_ADMIN_CHAT_ID`、`INTERNAL_ADMIN_TOKEN`、`GITHUB_USERNAME`、`GITHUB_PASSWORD`、`GITHUB_TOTP_SECRET`、`IMPORT_GITHUB_PAT`、`SITE_LOGIN_PROFILES_JSON={}`
 - Env:
-  `ALL_API_HUB_DATA_DIR=/data/all-api-hub`、`CHROMIUM_PATH=/usr/bin/chromium`、`LINUXDO_BASE_URL=https://linux.do`、`IMPORT_REPO_OWNER=jctn`、`IMPORT_REPO_NAME=all-api-hub-cloud`、`IMPORT_REPO_PATH=all-api-hub-backup-2026-03-19.json`、`IMPORT_REPO_REF=main`、`TZ=Asia/Shanghai`
+  `ALL_API_HUB_DATA_DIR=/data/all-api-hub`、`CHROMIUM_PATH=/usr/bin/chromium`、`LINUXDO_BASE_URL=https://linux.do`、`IMPORT_REPO_OWNER=jctn`、`IMPORT_REPO_NAME=all-api-hub-cloud`、`IMPORT_REPO_PATH=all-api-hub-backup-2026-03-19.json`、`IMPORT_REPO_REF=main`、`SITE_LOGIN_PROFILES_REPO_PATH=site-login-profiles.json`、`TZ=Asia/Shanghai`
 
 首轮 Zeabur Secret 模板：
 
@@ -178,6 +179,7 @@ IMPORT_REPO_OWNER=jctn
 IMPORT_REPO_NAME=all-api-hub-cloud
 IMPORT_REPO_PATH=all-api-hub-backup-2026-03-19.json
 IMPORT_REPO_REF=main
+SITE_LOGIN_PROFILES_REPO_PATH=site-login-profiles.json
 TZ=Asia/Shanghai
 ```
 
@@ -197,6 +199,18 @@ TZ=Asia/Shanghai
   }
 }
 ```
+
+如果你把站点 profile 文件放在私有数据仓库中，推荐直接设置：
+
+```text
+IMPORT_REPO_OWNER=jctn
+IMPORT_REPO_NAME=all-api-hub-private-data
+IMPORT_REPO_PATH=all-api-hub-backup-2026-03-19.json
+IMPORT_REPO_REF=main
+SITE_LOGIN_PROFILES_REPO_PATH=site-login-profiles.json
+```
+
+这时服务会在启动时自动从同一私有仓库读取 `site-login-profiles.json`，不再需要手工把大段 JSON 复制进 `SITE_LOGIN_PROFILES_JSON`。
 
 ### Zeabur 部署
 

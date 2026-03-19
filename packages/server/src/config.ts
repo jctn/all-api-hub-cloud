@@ -9,6 +9,10 @@ import {
   parseSiteLoginProfiles,
   type SiteLoginProfileMap,
 } from "./auth/siteLoginProfiles.js"
+import {
+  fetchGitHubRepoTextFile,
+  GitHubRepoFileHttpError,
+} from "./github/repoFile.js"
 
 export interface TelegramConfig {
   botToken: string
@@ -43,6 +47,7 @@ export interface ServerConfig {
   importRepo: ImportRepoConfig
   github: GitHubSsoConfig
   siteLoginProfiles: SiteLoginProfileMap
+  siteLoginProfilesRepo?: ImportRepoConfig | null
   timeZone: string
 }
 
@@ -71,6 +76,27 @@ export function loadServerConfig(
     )
   }
 
+  const importRepo: ImportRepoConfig = {
+    owner: requiredEnv(env, "IMPORT_REPO_OWNER"),
+    name: requiredEnv(env, "IMPORT_REPO_NAME"),
+    path: requiredEnv(env, "IMPORT_REPO_PATH"),
+    ref: requiredEnv(env, "IMPORT_REPO_REF"),
+    githubPat: requiredEnv(env, "IMPORT_GITHUB_PAT"),
+  }
+
+  const siteLoginProfilesRepoPath = env.SITE_LOGIN_PROFILES_REPO_PATH?.trim()
+  const siteLoginProfilesRepo = siteLoginProfilesRepoPath
+    ? {
+        owner:
+          env.SITE_LOGIN_PROFILES_REPO_OWNER?.trim() || importRepo.owner,
+        name: env.SITE_LOGIN_PROFILES_REPO_NAME?.trim() || importRepo.name,
+        path: siteLoginProfilesRepoPath,
+        ref: env.SITE_LOGIN_PROFILES_REPO_REF?.trim() || importRepo.ref,
+        githubPat:
+          env.SITE_LOGIN_PROFILES_GITHUB_PAT?.trim() || importRepo.githubPat,
+      }
+    : null
+
   return {
     port: Number.isFinite(port) ? port : 3000,
     databaseUrl,
@@ -88,13 +114,7 @@ export function loadServerConfig(
       webhookSecret: requiredEnv(env, "TG_WEBHOOK_SECRET"),
       adminChatId: requiredEnv(env, "TG_ADMIN_CHAT_ID"),
     },
-    importRepo: {
-      owner: requiredEnv(env, "IMPORT_REPO_OWNER"),
-      name: requiredEnv(env, "IMPORT_REPO_NAME"),
-      path: requiredEnv(env, "IMPORT_REPO_PATH"),
-      ref: requiredEnv(env, "IMPORT_REPO_REF"),
-      githubPat: requiredEnv(env, "IMPORT_GITHUB_PAT"),
-    },
+    importRepo,
     github: {
       username: requiredEnv(env, "GITHUB_USERNAME"),
       password: requiredEnv(env, "GITHUB_PASSWORD"),
@@ -102,6 +122,34 @@ export function loadServerConfig(
       linuxdoBaseUrl: env.LINUXDO_BASE_URL?.trim() || "https://linux.do",
     },
     siteLoginProfiles: parseSiteLoginProfiles(env.SITE_LOGIN_PROFILES_JSON),
+    siteLoginProfilesRepo,
     timeZone: env.TZ?.trim() || "Asia/Shanghai",
+  }
+}
+
+export async function resolveServerConfig(
+  config: ServerConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ServerConfig> {
+  if (!config.siteLoginProfilesRepo) {
+    return config
+  }
+
+  try {
+    const remoteProfiles = await fetchGitHubRepoTextFile(
+      config.siteLoginProfilesRepo,
+      fetchImpl,
+    )
+
+    return {
+      ...config,
+      siteLoginProfiles: parseSiteLoginProfiles(remoteProfiles.raw),
+      siteLoginProfilesRepo: null,
+    }
+  } catch (error) {
+    if (error instanceof GitHubRepoFileHttpError) {
+      throw new Error(`GitHub 登录 profile 下载失败，HTTP ${error.status}`)
+    }
+    throw error
   }
 }

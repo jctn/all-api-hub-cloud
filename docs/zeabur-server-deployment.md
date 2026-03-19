@@ -114,6 +114,7 @@ TZ=Asia/Shanghai
 - 上面这组 `IMPORT_REPO_*` 适用于当前仓库根目录的正式备份文件 `all-api-hub-backup-2026-03-19.json`
 - 如果你的正式备份文件在别的仓库或别的路径，只替换 `IMPORT_REPO_OWNER`、`IMPORT_REPO_NAME`、`IMPORT_REPO_PATH`、`IMPORT_REPO_REF`
 - 仓库根目录的 `tmp-import.json` 只是烟测样例，不建议作为正式导入源
+- 如果你把 `site-login-profiles.json` 也放在私有数据仓库里，推荐额外设置 `SITE_LOGIN_PROFILES_REPO_PATH=site-login-profiles.json`
 
 可直接参考 [packages/server/.env.example](/E:/all-api-hub/packages/server/.env.example)。
 也可以直接参考 [docs/zeabur-env.example.txt](/E:/all-api-hub/docs/zeabur-env.example.txt)。
@@ -127,6 +128,21 @@ TZ=Asia/Shanghai
 ```
 
 这时服务会正常启动，但 `/auth_refresh all` 对未配置 profile 的站点可能返回 `unsupported_auto_reauth`，属于预期表现。
+
+更推荐的长期方式是：
+
+1. 在私有数据仓库中维护 `site-login-profiles.json`
+2. 在 Zeabur Env 中设置 `SITE_LOGIN_PROFILES_REPO_PATH=site-login-profiles.json`
+3. 服务启动时自动从 GitHub 私有仓库加载该文件
+
+默认情况下，如果你不显式设置 `SITE_LOGIN_PROFILES_REPO_OWNER/NAME/REF/GITHUB_PAT`，服务会直接复用：
+
+- `IMPORT_REPO_OWNER`
+- `IMPORT_REPO_NAME`
+- `IMPORT_REPO_REF`
+- `IMPORT_GITHUB_PAT`
+
+也就是说，最常见的做法就是把账号备份 JSON 和 `site-login-profiles.json` 放在同一个私有数据仓库里统一管理。
 
 JSON 结构固定为“以 hostname 为 key 的对象”，示例：
 
