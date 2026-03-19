@@ -4,6 +4,7 @@ import Fastify, {
   type FastifyRequest,
 } from "fastify"
 import { FileSystemRepository, type StorageRepository } from "@all-api-hub/core"
+import type { UserFromGetMe } from "grammy/types"
 import { Pool } from "pg"
 
 import { PlaywrightSiteSessionService } from "./auth/playwrightSessionService.js"
@@ -25,6 +26,7 @@ export interface BuildServerOptions {
   repository?: StorageRepository
   fetchImpl?: typeof fetch
   taskCoordinator?: TaskCoordinator
+  telegramBotInfo?: UserFromGetMe
 }
 
 function parseBearerToken(header: string | undefined): string {
@@ -104,12 +106,13 @@ export async function buildServer(
     })
   }
 
-  const bot = createTelegramBot({
+  const bot = await createTelegramBot({
     config,
     repository,
     taskCoordinator,
     importer,
     orchestrator,
+    botInfo: options.telegramBotInfo,
     logger: {
       error(error, message) {
         app.log.error({ err: error }, message)

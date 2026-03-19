@@ -1,0 +1,9 @@
+# Suggested Zeabur Env for the current repository.
+ALL_API_HUB_DATA_DIR=/data/all-api-hub
+CHROMIUM_PATH=/usr/bin/chromium
+LINUXDO_BASE_URL=https://linux.do
+IMPORT_REPO_OWNER=jctn
+IMPORT_REPO_NAME=all-api-hub-cloud
+IMPORT_REPO_PATH=all-api-hub-backup-2026-03-19.json
+IMPORT_REPO_REF=main
+TZ=Asia/Shanghai

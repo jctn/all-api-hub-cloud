@@ -78,6 +78,7 @@ npm run release:desktop
 
 完整部署说明见 [docs/zeabur-server-deployment.md](/E:/all-api-hub/docs/zeabur-server-deployment.md)。
 配置模板见 [packages/server/.env.example](/E:/all-api-hub/packages/server/.env.example) 和 [examples/site-login-profiles.example.json](/E:/all-api-hub/examples/site-login-profiles.example.json)。
+Zeabur 可直接复制的配置清单见 [docs/zeabur-secrets.example.txt](/E:/all-api-hub/docs/zeabur-secrets.example.txt) 和 [docs/zeabur-env.example.txt](/E:/all-api-hub/docs/zeabur-env.example.txt)。
 
 服务启动：
 
@@ -141,13 +142,44 @@ TZ=Asia/Shanghai
 - `/data/all-api-hub/profiles/cloud/linuxdo-github` 继续保存共享 SSO 浏览器 profile
 - `/data/all-api-hub/diagnostics` 继续保存截图和诊断文件
 - 容器内如果使用系统 Chromium，请设置 `CHROMIUM_PATH=/usr/bin/chromium`
+- `SITE_LOGIN_PROFILES_JSON` 首轮部署可以先填 `{}`，这样服务可正常启动，只是暂不启用站点自动续期
+- 当前仓库默认导入源推荐使用 `jctn/all-api-hub-cloud` 的 `all-api-hub-backup-2026-03-19.json@main`
+- 仓库根目录的 `tmp-import.json` 只是烟测样例，不建议作为正式导入源
 
 推荐的 Zeabur Secret / Env 分组：
 
 - Secret:
-  `DATABASE_URL` 或 `POSTGRES_CONNECTION_STRING`、`TG_BOT_TOKEN`、`TG_WEBHOOK_SECRET`、`TG_ADMIN_CHAT_ID`、`INTERNAL_ADMIN_TOKEN`、`GITHUB_USERNAME`、`GITHUB_PASSWORD`、`GITHUB_TOTP_SECRET`、`IMPORT_GITHUB_PAT`、`SITE_LOGIN_PROFILES_JSON`
+  `DATABASE_URL` 或 `POSTGRES_CONNECTION_STRING`、`TG_BOT_TOKEN`、`TG_WEBHOOK_SECRET`、`TG_ADMIN_CHAT_ID`、`INTERNAL_ADMIN_TOKEN`、`GITHUB_USERNAME`、`GITHUB_PASSWORD`、`GITHUB_TOTP_SECRET`、`IMPORT_GITHUB_PAT`、`SITE_LOGIN_PROFILES_JSON={}`
 - Env:
-  `ALL_API_HUB_DATA_DIR=/data/all-api-hub`、`CHROMIUM_PATH=/usr/bin/chromium`、`LINUXDO_BASE_URL=https://linux.do`、`IMPORT_REPO_OWNER`、`IMPORT_REPO_NAME`、`IMPORT_REPO_PATH`、`IMPORT_REPO_REF`、`TZ=Asia/Shanghai`
+  `ALL_API_HUB_DATA_DIR=/data/all-api-hub`、`CHROMIUM_PATH=/usr/bin/chromium`、`LINUXDO_BASE_URL=https://linux.do`、`IMPORT_REPO_OWNER=jctn`、`IMPORT_REPO_NAME=all-api-hub-cloud`、`IMPORT_REPO_PATH=all-api-hub-backup-2026-03-19.json`、`IMPORT_REPO_REF=main`、`TZ=Asia/Shanghai`
+
+首轮 Zeabur Secret 模板：
+
+```text
+DATABASE_URL=<Zeabur PostgreSQL connection string>
+TG_BOT_TOKEN=<BotFather token>
+TG_WEBHOOK_SECRET=<random 48-64 chars>
+TG_ADMIN_CHAT_ID=<your telegram private chat id>
+INTERNAL_ADMIN_TOKEN=<random 48-64 chars>
+GITHUB_USERNAME=<your github username>
+GITHUB_PASSWORD=<your github password>
+GITHUB_TOTP_SECRET=<your github totp setup key>
+IMPORT_GITHUB_PAT=<github pat with repo contents read access>
+SITE_LOGIN_PROFILES_JSON={}
+```
+
+推荐的 Zeabur Env 模板：
+
+```text
+ALL_API_HUB_DATA_DIR=/data/all-api-hub
+CHROMIUM_PATH=/usr/bin/chromium
+LINUXDO_BASE_URL=https://linux.do
+IMPORT_REPO_OWNER=jctn
+IMPORT_REPO_NAME=all-api-hub-cloud
+IMPORT_REPO_PATH=all-api-hub-backup-2026-03-19.json
+IMPORT_REPO_REF=main
+TZ=Asia/Shanghai
+```
 
 `SITE_LOGIN_PROFILES_JSON` 示例：
 
@@ -172,7 +204,8 @@ TZ=Asia/Shanghai
 2. 连接 PostgreSQL，并设置 `DATABASE_URL`
 3. 设置 `ALL_API_HUB_DATA_DIR=/data/all-api-hub`
 4. 使用仓库根目录 `Dockerfile`
-5. 将 Zeabur HTTPS 域名配置到 Telegram webhook
+5. 首轮部署时可先将 `SITE_LOGIN_PROFILES_JSON` 设为 `{}`
+6. 将 Zeabur HTTPS 域名配置到 Telegram webhook
 
 示例 webhook：
 

@@ -6,6 +6,12 @@ import {
 } from "../src/auth/siteLoginProfiles.js"
 
 describe("site login profiles", () => {
+  it("returns an empty map for missing or blank config", () => {
+    expect(parseSiteLoginProfiles(undefined)).toEqual({})
+    expect(parseSiteLoginProfiles("")).toEqual({})
+    expect(parseSiteLoginProfiles("   ")).toEqual({})
+  })
+
   it("parses host keyed json and applies defaults", () => {
     const profiles = parseSiteLoginProfiles(
       JSON.stringify({

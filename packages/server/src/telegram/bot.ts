@@ -1,5 +1,6 @@
 import type { StorageRepository } from "@all-api-hub/core"
 import { Bot } from "grammy"
+import type { UserFromGetMe } from "grammy/types"
 
 import type { CheckinOrchestrator } from "../checkin/orchestrator.js"
 import type { ServerConfig } from "../config.js"
@@ -13,17 +14,21 @@ import {
   formatStatusMessage,
 } from "./formatting.js"
 
-export function createTelegramBot(params: {
+export async function createTelegramBot(params: {
   config: ServerConfig
   repository: StorageRepository
   taskCoordinator: TaskCoordinator
   importer: GitHubBackupImporter
   orchestrator: CheckinOrchestrator
+  botInfo?: UserFromGetMe
   logger: {
     error(error: unknown, message?: string): void
   }
 }) {
-  const bot = new Bot(params.config.telegram.botToken)
+  const bot = new Bot(
+    params.config.telegram.botToken,
+    params.botInfo ? { botInfo: params.botInfo } : undefined,
+  )
 
   bot.catch((error) => {
     params.logger.error(error.error, "Telegram bot handler failed")
@@ -151,6 +156,10 @@ export function createTelegramBot(params: {
       }),
     )
   })
+
+  if (!params.botInfo) {
+    await bot.init()
+  }
 
   return bot
 }

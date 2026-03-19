@@ -5,10 +5,22 @@ import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { FileSystemRepository } from "@all-api-hub/core"
+import type { UserFromGetMe } from "grammy/types"
 
 import { buildServer, type BuildServerOptions } from "../src/server.js"
 
 const tempDirectories: string[] = []
+const testBotInfo: UserFromGetMe = {
+  id: 123456789,
+  is_bot: true,
+  first_name: "Test Bot",
+  username: "test_bot",
+  can_join_groups: true,
+  can_read_all_group_messages: false,
+  supports_inline_queries: false,
+  can_connect_to_business: false,
+  has_main_web_app: false,
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -54,6 +66,7 @@ async function createServer(options: Partial<BuildServerOptions> = {}) {
       timeZone: "Asia/Shanghai",
     },
     fetchImpl: async () => new Response("{}", { status: 200 }),
+    telegramBotInfo: testBotInfo,
     ...options,
   })
 
@@ -87,6 +100,39 @@ describe("server routes", () => {
     })
 
     expect(response.statusCode).toBe(403)
+  })
+
+  it("accepts telegram webhook requests with a valid secret", async () => {
+    const server = await createServer()
+    const response = await server.inject({
+      method: "POST",
+      url: "/telegram/webhook",
+      headers: {
+        "x-telegram-bot-api-secret-token": "tg-secret",
+      },
+      payload: {
+        update_id: 1,
+        message: {
+          message_id: 1,
+          date: 1,
+          chat: {
+            id: 10001,
+            type: "private",
+          },
+          from: {
+            id: 10001,
+            is_bot: false,
+            first_name: "Admin",
+          },
+          text: "hello",
+        },
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      ok: true,
+    })
   })
 
   it("rejects internal requests without the bearer token", async () => {
