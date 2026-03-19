@@ -1,6 +1,8 @@
 import {
+  CheckinResultStatus,
   deriveAccountAuthState,
   deriveAccountSupportState,
+  type CheckinAccountResult,
   type AppSettings,
   type CheckinRunRecord,
   type SiteAccount,
@@ -53,9 +55,7 @@ export function formatCheckinMessage(
   timeZone: string,
 ): string {
   const summary = result.record.summary
-  const issues = result.record.results.filter(
-    (item) => item.status !== "success" && item.status !== "already_checked",
-  )
+  const refreshedAccountIds = new Set(result.refreshedAccountIds)
 
   const lines = [
     "批量签到完成。",
@@ -64,18 +64,67 @@ export function formatCheckinMessage(
     `success=${summary.success} already=${summary.alreadyChecked} failed=${summary.failed} manual=${summary.manualActionRequired} skipped=${summary.skipped}`,
   ]
 
-  if (result.refreshedAccountIds.length > 0) {
-    lines.push(`自动续期账号: ${result.refreshedAccountIds.join(", ")}`)
+  if (result.record.results.length === 0) {
+    lines.push("本次没有可执行的账号。")
+    return lines.join("\n")
   }
 
-  if (issues.length > 0) {
-    lines.push("问题账号:")
-    for (const issue of issues.slice(0, 10)) {
-      lines.push(`- ${issue.siteName}: ${issue.message}`)
-    }
+  lines.push("账号明细:")
+  for (const entry of result.record.results) {
+    lines.push(
+      `- "${entry.siteName || entry.accountId}"，签到情况：${formatCheckinEntry(entry, refreshedAccountIds)}`,
+    )
   }
 
   return lines.join("\n")
+}
+
+function formatCheckinEntry(
+  entry: CheckinAccountResult,
+  refreshedAccountIds: Set<string>,
+): string {
+  switch (entry.status) {
+    case CheckinResultStatus.AlreadyChecked:
+      return "已签到"
+    case CheckinResultStatus.Success: {
+      const rewardDetail = extractRewardDetail(entry)
+      const refreshDetail = refreshedAccountIds.has(entry.accountId)
+        ? "；已自动续期会话"
+        : ""
+      return rewardDetail
+        ? `签到成功（${rewardDetail}）${refreshDetail}`
+        : `签到成功${refreshDetail}`
+    }
+    case CheckinResultStatus.Skipped:
+      return "已跳过"
+    case CheckinResultStatus.Failed:
+    case CheckinResultStatus.ManualActionRequired:
+    default:
+      return `签到失败；失败原因：${entry.message || entry.rawMessage || "未知错误"}`
+  }
+}
+
+function extractRewardDetail(entry: CheckinAccountResult): string | null {
+  const candidates = [entry.message, entry.rawMessage].filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  )
+
+  for (const candidate of candidates) {
+    for (const pattern of [
+      /(获得[^，。；\n]*)/u,
+      /(奖励[^，。；\n]*)/u,
+      /(赠送[^，。；\n]*)/u,
+      /([+\-]?\d+(?:\.\d+)?\s*(?:元|刀|积分|金币|点|额度|余额|USD|usd|￥|¥))/u,
+    ]) {
+      const match = candidate.match(pattern)
+      const reward = match?.[1]?.trim()
+      if (reward) {
+        return reward
+      }
+    }
+  }
+
+  return null
 }
 
 export function formatRefreshMessage(
