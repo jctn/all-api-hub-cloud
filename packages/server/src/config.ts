@@ -37,6 +37,7 @@ export interface ServerConfig {
   dataDirectory: string
   diagnosticsDirectory: string
   sharedSsoProfileDirectory: string
+  chromiumExecutablePath?: string
   internalAdminToken: string
   telegram: TelegramConfig
   importRepo: ImportRepoConfig
@@ -80,6 +81,7 @@ export function loadServerConfig(
       "cloud",
       "linuxdo-github",
     ),
+    chromiumExecutablePath: env.CHROMIUM_PATH?.trim() || undefined,
     internalAdminToken: requiredEnv(env, "INTERNAL_ADMIN_TOKEN"),
     telegram: {
       botToken: requiredEnv(env, "TG_BOT_TOKEN"),

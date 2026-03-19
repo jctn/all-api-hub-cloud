@@ -91,6 +91,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       context = await chromium.launchPersistentContext(
         this.config.sharedSsoProfileDirectory,
         {
+          executablePath: this.config.chromiumExecutablePath,
           headless: true,
           args: ["--no-sandbox", "--disable-dev-shm-usage"],
           viewport: { width: 1400, height: 960 },

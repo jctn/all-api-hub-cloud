@@ -114,6 +114,7 @@ Authorization: Bearer <INTERNAL_ADMIN_TOKEN>
 PORT
 DATABASE_URL
 ALL_API_HUB_DATA_DIR=/data/all-api-hub
+CHROMIUM_PATH=/usr/bin/chromium
 TG_BOT_TOKEN
 TG_WEBHOOK_SECRET
 TG_ADMIN_CHAT_ID
@@ -139,13 +140,14 @@ TZ=Asia/Shanghai
 - PostgreSQL 只存账号、设置、签到运行记录和账号签到状态
 - `/data/all-api-hub/profiles/cloud/linuxdo-github` 继续保存共享 SSO 浏览器 profile
 - `/data/all-api-hub/diagnostics` 继续保存截图和诊断文件
+- 容器内如果使用系统 Chromium，请设置 `CHROMIUM_PATH=/usr/bin/chromium`
 
 推荐的 Zeabur Secret / Env 分组：
 
 - Secret:
   `DATABASE_URL` 或 `POSTGRES_CONNECTION_STRING`、`TG_BOT_TOKEN`、`TG_WEBHOOK_SECRET`、`TG_ADMIN_CHAT_ID`、`INTERNAL_ADMIN_TOKEN`、`GITHUB_USERNAME`、`GITHUB_PASSWORD`、`GITHUB_TOTP_SECRET`、`IMPORT_GITHUB_PAT`、`SITE_LOGIN_PROFILES_JSON`
 - Env:
-  `ALL_API_HUB_DATA_DIR=/data/all-api-hub`、`LINUXDO_BASE_URL=https://linux.do`、`IMPORT_REPO_OWNER`、`IMPORT_REPO_NAME`、`IMPORT_REPO_PATH`、`IMPORT_REPO_REF`、`TZ=Asia/Shanghai`
+  `ALL_API_HUB_DATA_DIR=/data/all-api-hub`、`CHROMIUM_PATH=/usr/bin/chromium`、`LINUXDO_BASE_URL=https://linux.do`、`IMPORT_REPO_OWNER`、`IMPORT_REPO_NAME`、`IMPORT_REPO_PATH`、`IMPORT_REPO_REF`、`TZ=Asia/Shanghai`
 
 `SITE_LOGIN_PROFILES_JSON` 示例：
 

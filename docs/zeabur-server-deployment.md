@@ -75,6 +75,7 @@ SITE_LOGIN_PROFILES_JSON
 
 ```text
 ALL_API_HUB_DATA_DIR=/data/all-api-hub
+CHROMIUM_PATH=/usr/bin/chromium
 LINUXDO_BASE_URL=https://linux.do
 IMPORT_REPO_OWNER=<your-owner>
 IMPORT_REPO_NAME=<your-repo>
@@ -88,6 +89,7 @@ TZ=Asia/Shanghai
 - `PORT` 由 Zeabur 注入，不手工覆盖
 - `IMPORT_REPO_REF` 默认使用 `main`
 - `ALL_API_HUB_DATA_DIR` 必须指向 Volume 内目录
+- `CHROMIUM_PATH` 用于让 Playwright 直接启动容器里的系统 Chromium
 
 可直接参考 [packages/server/.env.example](/E:/all-api-hub/packages/server/.env.example)。
 
