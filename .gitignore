@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-electron/
+dist-renderer/
+coverage/
+.turbo/
+.vite/
+*.log
+npm-debug.log*
+tmp/
+playwright-report/
+.DS_Store
+packages/desktop/release/
+packages/desktop/release-*/
+preload.cjs
+task.md
+tmp-import.json

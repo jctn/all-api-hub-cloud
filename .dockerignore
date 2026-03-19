@@ -1,0 +1,7 @@
+node_modules
+packages/desktop
+packages/cli/dist
+packages/core/dist
+packages/server/dist
+tmp
+*.log

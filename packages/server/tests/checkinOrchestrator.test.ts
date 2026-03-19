@@ -1,0 +1,145 @@
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+
+import { afterEach, describe, expect, it } from "vitest"
+
+import {
+  AuthType,
+  CheckinResultStatus,
+  FileSystemRepository,
+  HealthState,
+  type SiteAccount,
+} from "@all-api-hub/core"
+
+import { CheckinOrchestrator } from "../src/checkin/orchestrator.js"
+import type {
+  SessionRefreshResult,
+  SiteSessionRefresher,
+} from "../src/auth/playwrightSessionService.js"
+
+const tempDirectories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirectories.splice(0).map(async (directory) => {
+      await fs.rm(directory, { recursive: true, force: true })
+    }),
+  )
+})
+
+async function createRepositoryWithAccounts(accounts: SiteAccount[]) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aah-server-checkin-"))
+  tempDirectories.push(directory)
+
+  const repository = new FileSystemRepository(directory)
+  await repository.initialize()
+  await repository.replaceAccounts(accounts)
+  return repository
+}
+
+const baseAccount: SiteAccount = {
+  id: "acc-1",
+  site_name: "Demo",
+  site_url: "https://demo.example.com",
+  health: { status: HealthState.Healthy },
+  site_type: "new-api",
+  exchange_rate: 7.2,
+  account_info: {
+    id: 1,
+    access_token: "expired-token",
+    username: "alice",
+    quota: 0,
+    today_prompt_tokens: 0,
+    today_completion_tokens: 0,
+    today_quota_consumption: 0,
+    today_requests_count: 0,
+    today_income: 0,
+  },
+  last_sync_time: 0,
+  updated_at: 0,
+  created_at: 0,
+  notes: "",
+  tagIds: [],
+  disabled: false,
+  excludeFromTotalBalance: false,
+  authType: AuthType.AccessToken,
+  checkIn: {
+    enableDetection: true,
+    autoCheckInEnabled: true,
+  },
+}
+
+describe("CheckinOrchestrator", () => {
+  it("refreshes the session once and retries the account", async () => {
+    const repository = await createRepositoryWithAccounts([baseAccount])
+    const requests: string[] = []
+
+    const refresher: SiteSessionRefresher = {
+      async refreshSiteSession(): Promise<SessionRefreshResult> {
+        return {
+          status: "refreshed",
+          message: "ok",
+          account: {
+            ...baseAccount,
+            account_info: {
+              ...baseAccount.account_info,
+              access_token: "fresh-token",
+            },
+          },
+        }
+      },
+    }
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {
+          "demo.example.com": {
+            hostname: "demo.example.com",
+            loginPath: "/login",
+            loginButtonSelectors: ["button.login"],
+            successUrlPatterns: ["/console"],
+            tokenStorageKeys: ["access_token"],
+            postLoginSelectors: [".avatar"],
+          },
+        },
+      },
+      refresher,
+      async (_input, init) => {
+        const headers = new Headers(init?.headers)
+        requests.push(headers.get("Authorization") || "")
+        const auth = headers.get("Authorization")
+
+        if (auth === "Bearer expired-token") {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              message: "无权进行此操作",
+            }),
+            { status: 401 },
+          )
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: "签到成功",
+          }),
+          { status: 200 },
+        )
+      },
+    )
+
+    const result = await orchestrator.runCheckinBatch({
+      accountId: baseAccount.id,
+      mode: "manual",
+    })
+
+    expect(result.refreshedAccountIds).toEqual(["acc-1"])
+    expect(result.record.summary.success).toBe(1)
+    expect(result.record.results[0].status).toBe(CheckinResultStatus.Success)
+    expect(requests).toContain("Bearer expired-token")
+    expect(requests).toContain("Bearer fresh-token")
+  })
+})

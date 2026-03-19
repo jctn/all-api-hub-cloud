@@ -1,0 +1,42 @@
+{
+  "demo.example.com": {
+    "loginPath": "/auth/login",
+    "loginButtonSelectors": [
+      "button[data-provider='linuxdo']",
+      "a[href*='linux.do']",
+      "a[href*='github']"
+    ],
+    "successUrlPatterns": [
+      "/console",
+      "/dashboard"
+    ],
+    "tokenStorageKeys": [
+      "access_token",
+      "token"
+    ],
+    "postLoginSelectors": [
+      ".user-avatar",
+      ".account-menu",
+      "[data-testid='user-menu']"
+    ]
+  },
+  "*.example.net": {
+    "loginPath": "/login",
+    "loginButtonSelectors": [
+      "a[href*='linux.do']",
+      "button[data-provider='github']"
+    ],
+    "successUrlPatterns": [
+      "/panel",
+      "/home"
+    ],
+    "tokenStorageKeys": [
+      "access_token",
+      "authorization"
+    ],
+    "postLoginSelectors": [
+      ".navbar-avatar",
+      ".profile-dropdown"
+    ]
+  }
+}

@@ -1,0 +1,197 @@
+# All API Hub
+
+当前仓库同时包含三种运行形态：
+
+- `packages/core`: 共享类型、存储、导入解析、签到执行引擎
+- `packages/cli`: 本地 CLI，供 OpenClaw 或本地任务调用
+- `packages/desktop`: Electron 桌面版，负责账号管理、导入、手动登录、手动签到
+- `packages/server`: Zeabur 云端服务，负责 GitHub 仓库同步导入、Telegram 指令、Playwright 自动登录续期、云端批量签到
+
+## 开发
+
+```bash
+npm install
+npm run build
+npm run test
+```
+
+常用命令：
+
+```bash
+npm run dev:desktop
+npm run dev:server
+npm run start:desktop
+npm run start:server
+```
+
+## 本地 CLI
+
+构建后可直接调用：
+
+```bash
+node packages/cli/dist/index.js import <backup.json>
+node packages/cli/dist/index.js accounts list
+node packages/cli/dist/index.js checkin run
+node packages/cli/dist/index.js checkin run --account <accountId>
+```
+
+默认数据目录：
+
+- Windows: `%LOCALAPPDATA%\\all-api-hub-desktop`
+- 也可以通过环境变量 `ALL_API_HUB_DATA_DIR` 指定自定义目录
+
+`checkin run` 的退出语义：
+
+- 全部成功或已签到: 退出码 `0`
+- 存在失败或需要人工处理: 退出码 `1`
+
+## 桌面版发布
+
+统一发布命令：
+
+```bash
+npm run release:desktop
+```
+
+这个命令会执行以下流程：
+
+- 清理 `packages/desktop/dist-electron`
+- 清理 `packages/desktop/dist-renderer`
+- 清理 `packages/desktop/release`
+- 清理历史临时目录 `packages/desktop/release-*`
+- 重新构建 workspace
+- 重新打包桌面版到唯一正式目录 `packages/desktop/release`
+
+打包前请先关闭正在运行的桌面版 `exe`，否则 Windows 可能会因为文件占用导致清理失败。
+
+## 云端版
+
+云端版入口在 `packages/server`，部署形态固定为：
+
+- Zeabur 单实例
+- Dockerfile 部署
+- PostgreSQL 保存结构化业务数据
+- Volume 挂载到 `/data`
+- `ALL_API_HUB_DATA_DIR=/data/all-api-hub`
+- Telegram webhook 模式
+- Playwright Chromium 持久化 profile 与 diagnostics 继续落到 Volume
+
+完整部署说明见 [docs/zeabur-server-deployment.md](/E:/all-api-hub/docs/zeabur-server-deployment.md)。
+配置模板见 [packages/server/.env.example](/E:/all-api-hub/packages/server/.env.example) 和 [examples/site-login-profiles.example.json](/E:/all-api-hub/examples/site-login-profiles.example.json)。
+
+服务启动：
+
+```bash
+npm run build --workspace @all-api-hub/core --workspace @all-api-hub/server
+npm run start --workspace @all-api-hub/server
+```
+
+### Telegram 指令
+
+- `/sync_import`
+- `/checkin_all`
+- `/checkin <accountId>`
+- `/auth_refresh <accountId|all>`
+- `/accounts`
+- `/status`
+
+### 内部接口
+
+- `GET /internal/healthz`
+- `POST /internal/import/sync`
+- `POST /internal/checkin/run`
+- `POST /internal/auth/refresh`
+
+内部接口统一要求：
+
+```http
+Authorization: Bearer <INTERNAL_ADMIN_TOKEN>
+```
+
+### 关键环境变量
+
+```text
+PORT
+DATABASE_URL
+ALL_API_HUB_DATA_DIR=/data/all-api-hub
+TG_BOT_TOKEN
+TG_WEBHOOK_SECRET
+TG_ADMIN_CHAT_ID
+INTERNAL_ADMIN_TOKEN
+GITHUB_USERNAME
+GITHUB_PASSWORD
+GITHUB_TOTP_SECRET
+LINUXDO_BASE_URL=https://linux.do
+IMPORT_REPO_OWNER
+IMPORT_REPO_NAME
+IMPORT_REPO_PATH
+IMPORT_REPO_REF
+IMPORT_GITHUB_PAT
+SITE_LOGIN_PROFILES_JSON
+TZ=Asia/Shanghai
+```
+
+说明：
+
+- `DATABASE_URL` 优先使用 Zeabur PostgreSQL 的连接串
+- 若未设置 `DATABASE_URL`，服务会 fallback 到 `POSTGRES_CONNECTION_STRING`
+- `packages/server` 不再把 `accounts.json`、`app-settings.json`、`checkin-history.json` 作为主存储
+- PostgreSQL 只存账号、设置、签到运行记录和账号签到状态
+- `/data/all-api-hub/profiles/cloud/linuxdo-github` 继续保存共享 SSO 浏览器 profile
+- `/data/all-api-hub/diagnostics` 继续保存截图和诊断文件
+
+推荐的 Zeabur Secret / Env 分组：
+
+- Secret:
+  `DATABASE_URL` 或 `POSTGRES_CONNECTION_STRING`、`TG_BOT_TOKEN`、`TG_WEBHOOK_SECRET`、`TG_ADMIN_CHAT_ID`、`INTERNAL_ADMIN_TOKEN`、`GITHUB_USERNAME`、`GITHUB_PASSWORD`、`GITHUB_TOTP_SECRET`、`IMPORT_GITHUB_PAT`、`SITE_LOGIN_PROFILES_JSON`
+- Env:
+  `ALL_API_HUB_DATA_DIR=/data/all-api-hub`、`LINUXDO_BASE_URL=https://linux.do`、`IMPORT_REPO_OWNER`、`IMPORT_REPO_NAME`、`IMPORT_REPO_PATH`、`IMPORT_REPO_REF`、`TZ=Asia/Shanghai`
+
+`SITE_LOGIN_PROFILES_JSON` 示例：
+
+```json
+{
+  "demo.example.com": {
+    "loginPath": "/auth/login",
+    "loginButtonSelectors": [
+      "button[data-provider='linuxdo']",
+      "a[href*='linux.do']"
+    ],
+    "successUrlPatterns": ["/console", "/dashboard"],
+    "tokenStorageKeys": ["access_token", "token"],
+    "postLoginSelectors": [".user-avatar", ".account-menu"]
+  }
+}
+```
+
+### Zeabur 部署
+
+1. 挂载 Volume 到 `/data`
+2. 连接 PostgreSQL，并设置 `DATABASE_URL`
+3. 设置 `ALL_API_HUB_DATA_DIR=/data/all-api-hub`
+4. 使用仓库根目录 `Dockerfile`
+5. 将 Zeabur HTTPS 域名配置到 Telegram webhook
+
+示例 webhook：
+
+```text
+https://<your-zeabur-domain>/telegram/webhook
+```
+
+## Docker
+
+仓库根目录已经提供 `Dockerfile`，用于构建 `core + server`，不会构建 Electron 桌面版。
+
+## 打包产物
+
+Windows 安装包路径：
+
+```text
+packages/desktop/release/All API Hub Desktop Setup 0.1.0.exe
+```
+
+Windows 免安装版本路径：
+
+```text
+packages/desktop/release/win-unpacked/All API Hub Desktop.exe
+```

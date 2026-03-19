@@ -1,0 +1,596 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f0e8;
+  --panel: rgba(255, 252, 246, 0.96);
+  --panel-border: rgba(76, 56, 30, 0.12);
+  --text: #2d2417;
+  --muted: #756247;
+  --accent: #aa5d29;
+  --accent-dark: #7d431c;
+  --accent-soft: rgba(170, 93, 41, 0.12);
+  --danger: #b03a2e;
+  --warning: #8a5d00;
+  --shadow: 0 18px 40px rgba(79, 52, 24, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(233, 203, 162, 0.55), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(190, 112, 54, 0.18), transparent 32%),
+    linear-gradient(135deg, #efe8db 0%, #f8f2e9 46%, #efe0cd 100%);
+  color: var(--text);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  min-height: 100vh;
+  height: 100%;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.app-header-copy {
+  min-width: 0;
+  flex: 1 1 620px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent-dark);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 38px;
+  line-height: 1.1;
+}
+
+.app-subtitle {
+  margin: 10px 0 0;
+  color: var(--muted);
+  max-width: 100%;
+}
+
+.app-subtitle code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.main-layout {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  gap: 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.content-column {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.content-column > .panel {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.panel-header > div:first-child {
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.panel-header h2 {
+  margin: 0 0 6px;
+}
+
+.panel-header p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.account-list-panel,
+.account-form-panel,
+.history-panel,
+.empty-state {
+  padding: 22px;
+  height: 100%;
+}
+
+.account-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 12px;
+  overflow: auto;
+  padding: 2px 2px 6px 0;
+}
+
+.account-list-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.search-input {
+  flex: 1;
+}
+
+.account-list-empty {
+  border: 1px dashed rgba(76, 56, 30, 0.16);
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(255, 250, 243, 0.8);
+  color: var(--muted);
+}
+
+.account-card {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(255, 247, 236, 0.76);
+  text-align: left;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.account-card:hover,
+.account-card.selected {
+  transform: translateY(-2px);
+  border-color: rgba(170, 93, 41, 0.24);
+  background: #fff6eb;
+}
+
+.account-card-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.account-card-subtitle {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+
+.account-card-balance-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.account-card-balance-row strong {
+  font-size: 15px;
+}
+
+.account-card-balance-row span,
+.account-card-caption {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-card-meta,
+.import-summary,
+.history-summary,
+.actions-row,
+.detail-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-header-actions {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(121, 95, 59, 0.09);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tag-supported,
+.tag-has_access_token,
+.tag-success {
+  background: rgba(65, 128, 80, 0.14);
+  color: #2d6c3a;
+}
+
+.tag-unsupported,
+.tag-failed,
+.tag-manual_action_required {
+  background: rgba(176, 58, 46, 0.14);
+  color: var(--danger);
+}
+
+.tag-has_cookie,
+.tag-already_checked {
+  background: rgba(0, 104, 128, 0.12);
+  color: #0d6777;
+}
+
+.tag-checkin-today {
+  background: rgba(42, 128, 68, 0.16);
+  color: #215b2f;
+}
+
+.tag-checkin-pending {
+  background: rgba(138, 93, 0, 0.14);
+  color: var(--warning);
+}
+
+.tag-needs_login,
+.tag-warning,
+.tag-skipped {
+  background: rgba(138, 93, 0, 0.14);
+  color: var(--warning);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.detail-status-row {
+  margin-top: 12px;
+}
+
+.account-list-panel,
+.account-form-panel,
+.history-panel,
+.empty-state,
+.content-column > .panel {
+  min-height: 0;
+}
+
+.account-list-panel,
+.account-form-panel,
+.history-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.account-form-panel,
+.history-panel {
+  overflow: auto;
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-label-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.inline-link-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-dark);
+  text-decoration: underline;
+}
+
+.form-grid .span-2 {
+  grid-column: span 2;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid rgba(76, 56, 30, 0.16);
+  border-radius: 14px;
+  padding: 11px 12px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text);
+}
+
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+}
+
+.primary-button,
+.secondary-button,
+.danger-button {
+  border: 0;
+  border-radius: 14px;
+  padding: 11px 16px;
+}
+
+.secondary-button:disabled,
+.primary-button:disabled,
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.primary-button {
+  background: var(--accent);
+  color: #fff8f1;
+}
+
+.secondary-button {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.danger-button {
+  background: rgba(176, 58, 46, 0.14);
+  color: var(--danger);
+}
+
+.toast-banner,
+.import-summary {
+  margin-bottom: 16px;
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: rgba(255, 249, 236, 0.95);
+  border: 1px solid rgba(170, 93, 41, 0.16);
+}
+
+.task-progress-card {
+  margin-bottom: 16px;
+  border-radius: 22px;
+  padding: 18px 20px;
+  background: rgba(255, 249, 236, 0.97);
+  border: 1px solid rgba(170, 93, 41, 0.18);
+  box-shadow: var(--shadow);
+}
+
+.task-progress-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.task-progress-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.task-progress-header p {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.task-progress-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-progress-bar {
+  position: relative;
+  overflow: hidden;
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(170, 93, 41, 0.12);
+  margin-bottom: 14px;
+}
+
+.task-progress-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #d79b68 0%, #aa5d29 52%, #7d431c 100%);
+  transition: width 0.22s ease;
+}
+
+.task-progress-bar.indeterminate .task-progress-bar-fill {
+  width: 30%;
+  animation: task-progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+.task-progress-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-running {
+  background: rgba(170, 93, 41, 0.14);
+  color: var(--accent-dark);
+}
+
+@keyframes task-progress-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  100% {
+    transform: translateX(360%);
+  }
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.history-card {
+  border: 1px solid rgba(76, 56, 30, 0.12);
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(255, 250, 242, 0.9);
+}
+
+.history-card-header,
+.history-result-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-card-header {
+  margin-bottom: 12px;
+}
+
+.history-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.history-result-row {
+  align-items: flex-start;
+  border-top: 1px solid rgba(76, 56, 30, 0.08);
+  padding-top: 10px;
+}
+
+.history-result-row span {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.history-result-meta {
+  max-width: 50%;
+  text-align: right;
+}
+
+.empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 320px;
+  text-align: center;
+}
+
+@media (max-width: 1100px) {
+  .app-header,
+  .main-layout,
+  .panel-header,
+  .history-card-header,
+  .history-result-row {
+    display: block;
+  }
+
+  .main-layout {
+    grid-template-columns: 1fr;
+    flex: initial;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid .span-2 {
+    grid-column: span 1;
+  }
+
+  .actions-row {
+    margin-top: 14px;
+  }
+
+  .history-result-meta {
+    max-width: none;
+    text-align: left;
+    margin-top: 8px;
+  }
+
+  .app-shell {
+    height: auto;
+  }
+
+  .content-column,
+  .account-list-panel,
+  .account-form-panel,
+  .history-panel,
+  .empty-state {
+    display: block;
+    height: auto;
+  }
+
+  .account-list,
+  .account-form-panel,
+  .history-panel {
+    overflow: visible;
+  }
+}
