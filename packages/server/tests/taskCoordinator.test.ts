@@ -12,14 +12,24 @@ describe("TaskCoordinator", () => {
       }),
     })
 
-    const task = await coordinator.startExclusive(
+    const task = coordinator.startExclusive(
       "sync_import",
       "同步导入",
       async () => "ok",
     )
 
-    await expect(Promise.resolve(task)).resolves.toBe("ok")
+    await expect(task).resolves.toBe("ok")
     expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it("returns a promise that rejects with the task error", async () => {
+    const coordinator = new TaskCoordinator()
+
+    const task = coordinator.startExclusive("sync_import", "同步导入", async () => {
+      throw new Error("boom")
+    })
+
+    await expect(task).rejects.toThrow("boom")
   })
 
   it("throws BusyTaskError when the distributed lock is unavailable", async () => {

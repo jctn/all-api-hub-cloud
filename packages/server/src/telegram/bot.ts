@@ -56,7 +56,7 @@ export async function createTelegramBot(params: {
     reply: (text: string) => Promise<unknown>,
   ) => {
     try {
-      const task = await params.taskCoordinator.startExclusive(kind, label, run)
+      const task = params.taskCoordinator.startExclusive(kind, label, run)
       await reply(`${replyPrefix}已开始。`)
       void task
         .then(async (result) => {

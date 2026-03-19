@@ -33,11 +33,11 @@ export class TaskCoordinator {
 
   constructor(private readonly lockProvider?: TaskLockProvider) {}
 
-  async startExclusive<T>(
+  startExclusive<T>(
     kind: string,
     label: string,
     task: () => Promise<T>,
-  ): Promise<Promise<T>> {
+  ): Promise<T> {
     if (this.currentTask) {
       throw new BusyTaskError(this.getState())
     }
@@ -52,37 +52,34 @@ export class TaskCoordinator {
     this.currentTask = pendingTask
 
     let lockHandle: TaskLockHandle | null = null
-    try {
-      lockHandle = this.lockProvider ? await this.lockProvider.acquire() : null
-      if (this.lockProvider && !lockHandle) {
-        this.currentTask = null
-        throw new BusyTaskError(REMOTE_TASK_SNAPSHOT)
-      }
-
-      const promise = Promise.resolve()
-        .then(task)
-        .finally(async () => {
-          try {
-            await lockHandle?.release()
-          } finally {
-            this.lastCompletedTask = {
-              active: false,
-              kind,
-              label,
-              startedAt,
-              finishedAt: Date.now(),
-            }
-            this.currentTask = null
+    return Promise.resolve()
+      .then(async () => {
+        lockHandle = this.lockProvider ? await this.lockProvider.acquire() : null
+        if (this.lockProvider && !lockHandle) {
+          throw new BusyTaskError(REMOTE_TASK_SNAPSHOT)
+        }
+        return await task()
+      })
+      .catch((error) => {
+        if (this.currentTask === pendingTask) {
+          this.currentTask = null
+        }
+        throw error
+      })
+      .finally(async () => {
+        try {
+          await lockHandle?.release()
+        } finally {
+          this.lastCompletedTask = {
+            active: false,
+            kind,
+            label,
+            startedAt,
+            finishedAt: Date.now(),
           }
-        })
-
-      return promise
-    } catch (error) {
-      if (this.currentTask === pendingTask) {
-        this.currentTask = null
-      }
-      throw error
-    }
+          this.currentTask = null
+        }
+      })
   }
 
   async runExclusive<T>(
@@ -90,8 +87,7 @@ export class TaskCoordinator {
     label: string,
     task: () => Promise<T>,
   ): Promise<T> {
-    const promise = await this.startExclusive(kind, label, task)
-    return await promise
+    return await this.startExclusive(kind, label, task)
   }
 
   getState(): TaskSnapshot {
