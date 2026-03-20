@@ -162,7 +162,10 @@ export async function createTelegramBot(params: {
       "会话刷新任务",
       "auth_refresh",
       accountId ? `刷新账号会话: ${accountId}` : "刷新全部账号会话",
-      () => params.orchestrator.refreshSessions(accountId),
+      () =>
+        params.orchestrator.refreshSessions(accountId, {
+          onProgress: (text) => sendText(chatId, text),
+        }),
       (result) => formatRefreshMessage(result, params.config.timeZone),
       (text) => sendText(chatId, text),
     )

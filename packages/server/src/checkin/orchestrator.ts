@@ -50,6 +50,10 @@ export interface SessionRefreshRunResult {
   results: SessionRefreshAccountResult[]
 }
 
+export interface SessionRefreshRunOptions {
+  onProgress?: (message: string) => Promise<void> | void
+}
+
 function buildRefreshFailureResult(
   account: SiteAccount,
   refreshResult: SessionRefreshResult,
@@ -163,7 +167,10 @@ export class CheckinOrchestrator {
     }
   }
 
-  async refreshSessions(accountId?: string): Promise<SessionRefreshRunResult> {
+  async refreshSessions(
+    accountId?: string,
+    options: SessionRefreshRunOptions = {},
+  ): Promise<SessionRefreshRunResult> {
     const allAccounts = await this.repository.getAccounts()
     const selectedAccounts = accountId
       ? allAccounts.filter((account) => account.id === accountId)
@@ -171,14 +178,24 @@ export class CheckinOrchestrator {
     const startedAt = Date.now()
     const results: SessionRefreshAccountResult[] = []
 
-    for (const account of selectedAccounts) {
-      const result = await this.sessionRefresher.refreshSiteSession(account)
+    for (const [index, account] of selectedAccounts.entries()) {
+      await options.onProgress?.(
+        `刷新进度 (${index + 1}/${selectedAccounts.length})：${account.site_name} (${account.id})`,
+      )
+
+      const result = await this.sessionRefresher.refreshSiteSession(account, {
+        onProgress: (message) =>
+          options.onProgress?.(`[${account.site_name}] ${message}`),
+      })
       results.push({
         accountId: account.id,
         siteName: account.site_name,
         status: result.status,
         message: result.message,
       })
+      await options.onProgress?.(
+        `[${account.site_name}] 结果：${formatRefreshProgressStatus(result)}`,
+      )
     }
 
     const summary = results.reduce(
@@ -209,5 +226,19 @@ export class CheckinOrchestrator {
       summary,
       results,
     }
+  }
+}
+
+function formatRefreshProgressStatus(result: SessionRefreshResult): string {
+  switch (result.status) {
+    case "refreshed":
+      return `刷新成功；${result.message}`
+    case "manual_action_required":
+      return `需人工介入；${result.message}`
+    case "unsupported_auto_reauth":
+      return `未配置自动续期；${result.message}`
+    case "failed":
+    default:
+      return `刷新失败；${result.message}`
   }
 }

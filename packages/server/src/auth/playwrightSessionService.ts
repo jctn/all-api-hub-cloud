@@ -58,8 +58,15 @@ export interface SessionRefreshResult {
   diagnosticPath?: string
 }
 
+export interface SessionRefreshOptions {
+  onProgress?: (message: string) => Promise<void> | void
+}
+
 export interface SiteSessionRefresher {
-  refreshSiteSession(account: SiteAccount): Promise<SessionRefreshResult>
+  refreshSiteSession(
+    account: SiteAccount,
+    options?: SessionRefreshOptions,
+  ): Promise<SessionRefreshResult>
 }
 
 export class PlaywrightSiteSessionService implements SiteSessionRefresher {
@@ -69,7 +76,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async refreshSiteSession(account: SiteAccount): Promise<SessionRefreshResult> {
+  async refreshSiteSession(
+    account: SiteAccount,
+    options: SessionRefreshOptions = {},
+  ): Promise<SessionRefreshResult> {
     const profile = matchSiteLoginProfile(
       account.site_url,
       this.config.siteLoginProfiles,
@@ -81,14 +91,21 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
     }
 
+    await this.reportProgress(
+      options,
+      `匹配到登录 profile：${new URL(account.site_url).hostname}${profile.loginPath}`,
+    )
+
     await fs.mkdir(this.config.sharedSsoProfileDirectory, { recursive: true })
     await fs.mkdir(this.config.diagnosticsDirectory, { recursive: true })
     await this.cleanupStaleProfileLocks(this.config.sharedSsoProfileDirectory)
+    await this.reportProgress(options, "已准备浏览器数据目录并清理残留锁文件")
 
     let context: BrowserContext | null = null
     let page: Page | null = null
 
     try {
+      await this.reportProgress(options, "启动 Chromium 持久化上下文")
       context = await chromium.launchPersistentContext(
         this.config.sharedSsoProfileDirectory,
         {
@@ -99,7 +116,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         },
       )
       page = context.pages()[0] ?? (await context.newPage())
+      await this.reportProgress(options, "浏览器上下文已启动")
 
+      await this.reportProgress(
+        options,
+        `打开站点登录页：${joinUrl(account.site_url, profile.loginPath)}`,
+      )
       await page.goto(joinUrl(account.site_url, profile.loginPath), {
         waitUntil: "domcontentloaded",
         timeout: 90_000,
@@ -110,9 +132,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         page,
         account,
         profile,
+        options,
       )
       if (flowResult.status !== "ready") {
         const diagnosticPath = await this.captureDiagnostic(page, account)
+        if (diagnosticPath) {
+          await this.reportProgress(options, `已保存诊断截图：${diagnosticPath}`)
+        }
         return {
           status:
             flowResult.status === "unsupported_auto_reauth"
@@ -123,15 +149,20 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         }
       }
 
+      await this.reportProgress(options, "目标站点已登录，开始提取会话信息")
       const refreshedAccount = await this.captureAuthenticatedAccount(
         flowResult.page,
         context,
         account,
         profile,
+        options,
       )
 
       if (!refreshedAccount) {
         const diagnosticPath = await this.captureDiagnostic(page, account)
+        if (diagnosticPath) {
+          await this.reportProgress(options, `已保存诊断截图：${diagnosticPath}`)
+        }
         return {
           status: "failed",
           message: "登录成功后未通过 /api/user/self 验证",
@@ -140,6 +171,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       await this.repository.saveAccount(refreshedAccount)
+      await this.reportProgress(options, "已保存刷新后的账号认证信息")
       return {
         status: "refreshed",
         message: "站点会话已刷新",
@@ -149,6 +181,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       const diagnosticPath = page
         ? await this.captureDiagnostic(page, account)
         : undefined
+      await this.reportProgress(
+        options,
+        `刷新流程异常：${error instanceof Error ? error.message : String(error)}`,
+      )
+      if (diagnosticPath) {
+        await this.reportProgress(options, `已保存诊断截图：${diagnosticPath}`)
+      }
       return {
         status: "failed",
         message: error instanceof Error ? error.message : String(error),
@@ -164,6 +203,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     page: Page,
     account: SiteAccount,
     profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
   ): Promise<
     | { status: "ready"; page: Page }
     | { status: "manual_action_required"; message: string }
@@ -172,10 +212,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const targetHost = new URL(account.site_url).hostname.toLowerCase()
     const linuxdoHost = new URL(this.config.github.linuxdoBaseUrl).hostname.toLowerCase()
     const deadline = Date.now() + 120_000
+    const visitedHosts = new Set<string>()
 
     while (Date.now() < deadline) {
       const successPage = await this.findTargetPage(context, targetHost, profile)
       if (successPage) {
+        await this.reportProgress(options, `检测到目标站点已回到 ${targetHost}`)
         return { status: "ready", page: successPage }
       }
 
@@ -183,9 +225,16 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         this.pickFlowPage(context, targetHost, linuxdoHost) ?? page
       const currentUrl = flowPage.url()
       const currentHost = this.getUrlHostname(currentUrl)
+      const currentHostLabel = currentHost || currentUrl || "about:blank"
+
+      if (currentHostLabel && !visitedHosts.has(currentHostLabel)) {
+        visitedHosts.add(currentHostLabel)
+        await this.reportProgress(options, `当前流程页面：${currentHostLabel}`)
+      }
 
       const challengeMessage = await this.detectManualChallenge(flowPage)
       if (challengeMessage) {
+        await this.reportProgress(options, challengeMessage)
         return {
           status: "manual_action_required",
           message: challengeMessage,
@@ -193,6 +242,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       if (currentHost === "github.com" && (await this.isGitHubOtpPage(flowPage))) {
+        await this.reportProgress(options, "检测到 GitHub 二步验证页，提交 TOTP")
         await this.submitGitHubTotp(flowPage)
         continue
       }
@@ -201,6 +251,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         currentHost === "github.com" &&
         (await this.isGitHubLoginPage(flowPage))
       ) {
+        await this.reportProgress(options, "检测到 GitHub 登录页，提交用户名和密码")
         await this.submitGitHubCredentials(flowPage)
         continue
       }
@@ -209,6 +260,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         currentHost === "github.com" &&
         (await this.clickFirstVisibleWithPopup(context, flowPage, GITHUB_AUTHORIZE_SELECTORS))
       ) {
+        await this.reportProgress(options, "检测到 GitHub 授权确认页，提交授权")
         continue
       }
 
@@ -220,6 +272,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             LINUXDO_GITHUB_SELECTORS,
           )
         ) {
+          await this.reportProgress(options, "检测到 Linux.do 授权页，点击 GitHub 登录入口")
           continue
         }
 
@@ -236,6 +289,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             profile.loginButtonSelectors,
           )
         ) {
+          await this.reportProgress(options, "已点击站点登录入口，等待 SSO 跳转")
           continue
         }
 
@@ -256,15 +310,18 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     context: BrowserContext,
     account: SiteAccount,
     profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
   ): Promise<SiteAccount | null> {
     const targetBaseUrl = normalizeBaseUrl(account.site_url)
     if (this.getUrlHostname(page.url()) !== new URL(targetBaseUrl).hostname) {
+      await this.reportProgress(options, `返回目标站点主页：${targetBaseUrl}`)
       await page.goto(targetBaseUrl, {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       })
     }
 
+    await this.reportProgress(options, "提取 cookie 与 access token")
     const cookieHeader = buildCookieHeader(await context.cookies([targetBaseUrl]))
     const accessToken = await this.extractAccessToken(page, profile)
     const now = Date.now()
@@ -285,14 +342,18 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       cookieAuth: cookieHeader ? { sessionCookie: cookieHeader } : account.cookieAuth,
     }
 
+    await this.reportProgress(options, "调用 /api/user/self 校验登录状态")
     const synced = await fetchNewApiSelf({
       account: nextAccount,
       fetchImpl: this.fetchImpl,
     })
 
     if (!synced) {
+      await this.reportProgress(options, "/api/user/self 校验失败")
       return null
     }
+
+    await this.reportProgress(options, "/api/user/self 校验成功")
 
     const finalAccessToken = accessToken || synced.account_info.access_token || ""
 
@@ -549,6 +610,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         }).catch(() => undefined)
       }),
     )
+  }
+
+  private async reportProgress(
+    options: SessionRefreshOptions,
+    message: string,
+  ): Promise<void> {
+    await options.onProgress?.(message)
   }
 
   private pickFlowPage(

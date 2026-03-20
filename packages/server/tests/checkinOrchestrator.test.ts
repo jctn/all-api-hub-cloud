@@ -142,4 +142,43 @@ describe("CheckinOrchestrator", () => {
     expect(requests).toContain("Bearer expired-token")
     expect(requests).toContain("Bearer fresh-token")
   })
+
+  it("emits progress messages during refreshSessions", async () => {
+    const repository = await createRepositoryWithAccounts([baseAccount])
+    const progress: string[] = []
+
+    const refresher: SiteSessionRefresher = {
+      async refreshSiteSession(
+        _account,
+        options,
+      ): Promise<SessionRefreshResult> {
+        await options?.onProgress?.("打开站点登录页")
+        return {
+          status: "manual_action_required",
+          message: "登录流程超时",
+        }
+      },
+    }
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {},
+      },
+      refresher,
+    )
+
+    const result = await orchestrator.refreshSessions(baseAccount.id, {
+      onProgress: async (message) => {
+        progress.push(message)
+      },
+    })
+
+    expect(result.summary.manualActionRequired).toBe(1)
+    expect(progress).toEqual([
+      `刷新进度 (1/1)：${baseAccount.site_name} (${baseAccount.id})`,
+      `[${baseAccount.site_name}] 打开站点登录页`,
+      `[${baseAccount.site_name}] 结果：需人工介入；登录流程超时`,
+    ])
+  })
 })
