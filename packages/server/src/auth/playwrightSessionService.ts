@@ -459,6 +459,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         challengeUrl.toString(),
         userAgent,
         this.fetchImpl,
+        (msg) => this.reportProgress(options, `[cloudflyer] ${msg}`),
       )
 
       if (!solution) {
