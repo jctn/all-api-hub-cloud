@@ -268,7 +268,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         continue
       }
 
-      if (currentHost === linuxdoHost) {
+      if (this.isSameOrSubdomain(currentHost, linuxdoHost)) {
         await this.dismissCommonOverlays(flowPage)
         if (
           await this.clickFirstVisibleWithPopup(
@@ -666,7 +666,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
     return (
       pages.find((item) => this.getUrlHostname(item.url()) === "github.com") ||
-      pages.find((item) => this.getUrlHostname(item.url()) === linuxdoHost) ||
+      pages.find((item) =>
+        this.isSameOrSubdomain(this.getUrlHostname(item.url()), linuxdoHost),
+      ) ||
       pages.find((item) => this.getUrlHostname(item.url()) === targetHost) ||
       pages[0] ||
       null
@@ -744,5 +746,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const filePath = path.join(this.config.diagnosticsDirectory, fileName)
     await page.screenshot({ path: filePath, fullPage: true }).catch(() => undefined)
     return filePath
+  }
+
+  private isSameOrSubdomain(hostname: string, expectedHost: string): boolean {
+    return hostname === expectedHost || hostname.endsWith(`.${expectedHost}`)
   }
 }
