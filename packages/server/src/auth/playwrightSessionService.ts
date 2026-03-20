@@ -14,11 +14,12 @@ import { chromium, type BrowserContext, type Page } from "playwright"
 
 import type { ServerConfig } from "../config.js"
 import { sanitizeFileName } from "../utils/text.js"
+import { solveCloudflareChallenge } from "./cloudflyerClient.js"
+import { generateGitHubTotp } from "./githubTotp.js"
 import {
   matchSiteLoginProfile,
   type SiteLoginProfile,
 } from "./siteLoginProfiles.js"
-import { generateGitHubTotp } from "./githubTotp.js"
 
 const LINUXDO_GITHUB_SELECTORS = [
   "a[href*='github']",
@@ -214,6 +215,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const deadline = Date.now() + 120_000
     const visitedUrls = new Set<string>()
     const loggedSelectorDiagnostics = new Set<string>()
+    let cloudflyerAttempted = false
 
     while (Date.now() < deadline) {
       const successPage = await this.findTargetPage(context, targetHost, profile)
@@ -234,6 +236,18 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       if (currentUrl && !visitedUrls.has(currentUrl)) {
         visitedUrls.add(currentUrl)
         await this.reportProgress(options, `当前流程页面：${currentPageLabel}`)
+      }
+
+      if (await this.detectCloudflareChallenge(flowPage)) {
+        if (!cloudflyerAttempted && this.config.cloudflyer) {
+          cloudflyerAttempted = true
+          if (await this.solveCloudflareWithCloudflyer(context, flowPage, options)) {
+            continue
+          }
+        }
+        const cfMsg = "登录流程遇到 Cloudflare / Turnstile / CAPTCHA，需人工介入"
+        await this.reportProgress(options, cfMsg)
+        return { status: "manual_action_required", message: cfMsg }
       }
 
       const challengeMessage = await this.detectManualChallenge(flowPage)
@@ -393,21 +407,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   }
 
   private async detectManualChallenge(page: Page): Promise<string | null> {
-    const title = await page.title().catch(() => "")
-    const bodyText = await page
-      .locator("body")
-      .innerText({ timeout: 2_000 })
-      .catch(() => "")
-    const normalized = `${title}\n${bodyText}`.toLowerCase()
+    const normalized = await this.readNormalizedPageText(page)
 
-    if (
-      normalized.includes("请稍候") ||
-      normalized.includes("just a moment") ||
-      normalized.includes("turnstile") ||
-      normalized.includes("cloudflare") ||
-      normalized.includes("captcha")
-    ) {
-      return "登录流程遇到 Cloudflare / Turnstile / CAPTCHA，需人工介入"
+    if (normalized.includes("captcha")) {
+      return "登录流程遇到 CAPTCHA，需人工介入"
     }
 
     if (
@@ -422,6 +425,78 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     return null
+  }
+
+  private async detectCloudflareChallenge(page: Page): Promise<boolean> {
+    const normalized = await this.readNormalizedPageText(page)
+    return (
+      normalized.includes("请稍候") ||
+      normalized.includes("just a moment") ||
+      normalized.includes("turnstile") ||
+      normalized.includes("cloudflare")
+    )
+  }
+
+  private async solveCloudflareWithCloudflyer(
+    context: BrowserContext,
+    page: Page,
+    options: SessionRefreshOptions,
+  ): Promise<boolean> {
+    if (!this.config.cloudflyer) return false
+
+    try {
+      const challengeUrl = new URL(page.url())
+      await this.reportProgress(
+        options,
+        "检测到 Cloudflare 拦截，正在通过 cloudflyer 自动破解",
+      )
+
+      const userAgent = await page
+        .evaluate(() => navigator.userAgent)
+        .catch(() => "")
+      const solution = await solveCloudflareChallenge(
+        this.config.cloudflyer,
+        challengeUrl.toString(),
+        userAgent,
+        this.fetchImpl,
+      )
+
+      if (!solution) {
+        await this.reportProgress(options, "cloudflyer 自动破解失败")
+        return false
+      }
+
+      await context.addCookies([
+        {
+          name: "cf_clearance",
+          value: solution.cfClearance,
+          domain: challengeUrl.hostname,
+          path: "/",
+          secure: challengeUrl.protocol === "https:",
+        },
+      ])
+
+      await this.reportProgress(
+        options,
+        "已注入 cf_clearance，重新加载页面",
+      )
+      await page
+        .reload({ waitUntil: "domcontentloaded", timeout: 60_000 })
+        .catch(() => undefined)
+      return true
+    } catch {
+      await this.reportProgress(options, "cloudflyer 自动破解异常")
+      return false
+    }
+  }
+
+  private async readNormalizedPageText(page: Page): Promise<string> {
+    const title = await page.title().catch(() => "")
+    const bodyText = await page
+      .locator("body")
+      .innerText({ timeout: 2_000 })
+      .catch(() => "")
+    return `${title}\n${bodyText}`.toLowerCase()
   }
 
   private async isLoginSuccess(
