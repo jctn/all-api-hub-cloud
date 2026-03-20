@@ -13,6 +13,7 @@ import {
   formatRefreshMessage,
   formatStatusMessage,
 } from "./formatting.js"
+import { splitTelegramMessage } from "./messageChunks.js"
 
 export async function createTelegramBot(params: {
   config: ServerConfig
@@ -34,13 +35,25 @@ export async function createTelegramBot(params: {
     params.logger.error(error.error, "Telegram bot handler failed")
   })
 
+  const replyText = async (
+    reply: (text: string) => Promise<unknown>,
+    text: string,
+  ) => {
+    for (const chunk of splitTelegramMessage(text)) {
+      await reply(chunk)
+    }
+  }
+
   bot.use(async (ctx, next) => {
     const chatId = String(ctx.chat?.id ?? "")
     if (
       ctx.chat?.type !== "private" ||
       chatId !== params.config.telegram.adminChatId
     ) {
-      await ctx.reply("当前机器人仅允许管理员私聊使用。")
+      await replyText(
+        (text) => ctx.reply(text),
+        "当前机器人仅允许管理员私聊使用。",
+      )
       return
     }
 
@@ -57,18 +70,21 @@ export async function createTelegramBot(params: {
   ) => {
     try {
       const task = params.taskCoordinator.startExclusive(kind, label, run)
-      await reply(`${replyPrefix}已开始。`)
+      await replyText(reply, `${replyPrefix}已开始。`)
       void task
         .then(async (result) => {
-          await reply(format(result))
+          await replyText(reply, format(result))
         })
         .catch(async (error) => {
-          await reply(`任务失败：${error instanceof Error ? error.message : String(error)}`)
+          await replyText(
+            reply,
+            `任务失败：${error instanceof Error ? error.message : String(error)}`,
+          )
         })
       return
     } catch (error) {
       if (error instanceof BusyTaskError) {
-        await reply(error.message)
+        await replyText(reply, error.message)
         return
       }
 
@@ -104,7 +120,7 @@ export async function createTelegramBot(params: {
   bot.command("checkin", async (ctx) => {
     const accountId = ctx.match.trim()
     if (!accountId) {
-      await ctx.reply("用法：/checkin <accountId>")
+      await replyText((text) => ctx.reply(text), "用法：/checkin <accountId>")
       return
     }
 
@@ -138,7 +154,7 @@ export async function createTelegramBot(params: {
 
   bot.command("accounts", async (ctx) => {
     const accounts = await params.repository.getAccounts()
-    await ctx.reply(formatAccountsMessage(accounts))
+    await replyText((text) => ctx.reply(text), formatAccountsMessage(accounts))
   })
 
   bot.command("status", async (ctx) => {
@@ -147,7 +163,8 @@ export async function createTelegramBot(params: {
       params.repository.getHistory(),
     ])
 
-    await ctx.reply(
+    await replyText(
+      (text) => ctx.reply(text),
       formatStatusMessage({
         task: params.taskCoordinator.getState(),
         latestRecord: history.records[0],

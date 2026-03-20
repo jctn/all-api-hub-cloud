@@ -15,6 +15,7 @@ import type {
 import type { GitHubImportSyncResult } from "../importing/githubRepoImporter.js"
 import type { TaskSnapshot } from "../taskCoordinator.js"
 import { formatTimestamp } from "../utils/text.js"
+import { truncateTelegramLine } from "./messageChunks.js"
 
 function formatAccount(account: SiteAccount): string {
   const authState = deriveAccountAuthState(account)
@@ -100,7 +101,7 @@ function formatCheckinEntry(
     case CheckinResultStatus.Failed:
     case CheckinResultStatus.ManualActionRequired:
     default:
-      return `签到失败；失败原因：${entry.message || entry.rawMessage || "未知错误"}`
+      return `签到失败；失败原因：${truncateTelegramLine(entry.message || entry.rawMessage || "未知错误")}`
   }
 }
 
@@ -139,7 +140,7 @@ export function formatRefreshMessage(
   ]
 
   for (const item of result.results.filter((entry) => entry.status !== "refreshed").slice(0, 10)) {
-    lines.push(`- ${item.siteName}: ${item.message}`)
+    lines.push(`- ${item.siteName}: ${truncateTelegramLine(item.message)}`)
   }
 
   return lines.join("\n")
