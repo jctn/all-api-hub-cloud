@@ -44,6 +44,17 @@ export async function createTelegramBot(params: {
     }
   }
 
+  const sendText = async (
+    chatId: number | undefined,
+    text: string,
+  ) => {
+    if (chatId === undefined) {
+      return
+    }
+
+    await replyText((chunk) => bot.api.sendMessage(chatId, chunk), text)
+  }
+
   bot.use(async (ctx, next) => {
     const chatId = String(ctx.chat?.id ?? "")
     if (
@@ -93,17 +104,19 @@ export async function createTelegramBot(params: {
   }
 
   bot.command("sync_import", async (ctx) => {
+    const chatId = ctx.chat?.id
     await startTask(
       "同步导入任务",
       "sync_import",
       "从 GitHub 仓库同步账号 JSON",
       () => params.importer.syncFromRepo(),
       (result) => formatImportMessage(result, params.config.timeZone),
-      (text) => ctx.reply(text),
+      (text) => sendText(chatId, text),
     )
   })
 
   bot.command("checkin_all", async (ctx) => {
+    const chatId = ctx.chat?.id
     await startTask(
       "批量签到任务",
       "checkin_all",
@@ -113,14 +126,15 @@ export async function createTelegramBot(params: {
           mode: "scheduled",
         }),
       (result) => formatCheckinMessage(result, params.config.timeZone),
-      (text) => ctx.reply(text),
+      (text) => sendText(chatId, text),
     )
   })
 
   bot.command("checkin", async (ctx) => {
+    const chatId = ctx.chat?.id
     const accountId = ctx.match.trim()
     if (!accountId) {
-      await replyText((text) => ctx.reply(text), "用法：/checkin <accountId>")
+      await sendText(chatId, "用法：/checkin <accountId>")
       return
     }
 
@@ -134,11 +148,12 @@ export async function createTelegramBot(params: {
           mode: "manual",
         }),
       (result) => formatCheckinMessage(result, params.config.timeZone),
-      (text) => ctx.reply(text),
+      (text) => sendText(chatId, text),
     )
   })
 
   bot.command("auth_refresh", async (ctx) => {
+    const chatId = ctx.chat?.id
     const input = ctx.match.trim()
     const accountId = !input || input.toLowerCase() === "all" ? undefined : input
 
@@ -148,23 +163,25 @@ export async function createTelegramBot(params: {
       accountId ? `刷新账号会话: ${accountId}` : "刷新全部账号会话",
       () => params.orchestrator.refreshSessions(accountId),
       (result) => formatRefreshMessage(result, params.config.timeZone),
-      (text) => ctx.reply(text),
+      (text) => sendText(chatId, text),
     )
   })
 
   bot.command("accounts", async (ctx) => {
+    const chatId = ctx.chat?.id
     const accounts = await params.repository.getAccounts()
-    await replyText((text) => ctx.reply(text), formatAccountsMessage(accounts))
+    await sendText(chatId, formatAccountsMessage(accounts))
   })
 
   bot.command("status", async (ctx) => {
+    const chatId = ctx.chat?.id
     const [settings, history] = await Promise.all([
       params.repository.getSettings(),
       params.repository.getHistory(),
     ])
 
-    await replyText(
-      (text) => ctx.reply(text),
+    await sendText(
+      chatId,
       formatStatusMessage({
         task: params.taskCoordinator.getState(),
         latestRecord: history.records[0],
