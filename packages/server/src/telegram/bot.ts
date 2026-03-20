@@ -187,6 +187,11 @@ export async function createTelegramBot(params: {
         latestRecord: history.records[0],
         settings,
         timeZone: params.config.timeZone,
+        deploymentVersion: params.config.deploymentVersion,
+        appVersion: params.config.appVersion,
+        gitCommitShortSha: params.config.gitCommitShortSha,
+        gitBranch: params.config.gitBranch,
+        gitCommitMessage: params.config.gitCommitMessage,
       }),
     )
   })

@@ -142,6 +142,12 @@ export async function buildServer(
 
   app.get("/internal/healthz", async () => ({
     ok: true,
+    version: config.deploymentVersion,
+    appVersion: config.appVersion,
+    gitCommitSha: config.gitCommitSha ?? null,
+    gitCommitShortSha: config.gitCommitShortSha ?? null,
+    gitBranch: config.gitBranch ?? null,
+    gitCommitMessage: config.gitCommitMessage ?? null,
     storageMode,
     dataDirectory: config.dataDirectory,
     latestMigrationId: migrationResult.latestMigrationId,

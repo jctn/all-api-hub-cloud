@@ -54,6 +54,22 @@ describe("loadServerConfig", () => {
       githubPat: "custom-pat",
     })
   })
+
+  it("derives deployment version and git metadata from environment", () => {
+    const config = loadServerConfig({
+      ...baseEnv,
+      ZEABUR_GIT_BRANCH: "main",
+      ZEABUR_GIT_COMMIT_SHA: "1234567890abcdef",
+      ZEABUR_GIT_COMMIT_MESSAGE: "Deploy server",
+    })
+
+    expect(config.appVersion).toBe("0.1.0")
+    expect(config.deploymentVersion).toBe("0.1.0+1234567")
+    expect(config.gitCommitSha).toBe("1234567890abcdef")
+    expect(config.gitCommitShortSha).toBe("1234567")
+    expect(config.gitBranch).toBe("main")
+    expect(config.gitCommitMessage).toBe("Deploy server")
+  })
 })
 
 describe("resolveServerConfig", () => {

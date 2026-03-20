@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 import {
   resolveDefaultDataDirectory,
@@ -49,6 +51,12 @@ export interface ServerConfig {
   siteLoginProfiles: SiteLoginProfileMap
   siteLoginProfilesRepo?: ImportRepoConfig | null
   timeZone: string
+  appVersion: string
+  deploymentVersion: string
+  gitCommitSha?: string
+  gitCommitShortSha?: string
+  gitBranch?: string
+  gitCommitMessage?: string
 }
 
 function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {
@@ -57,6 +65,20 @@ function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {
     throw new Error(`Missing required environment variable: ${key}`)
   }
   return value
+}
+
+function readPackageVersion(): string {
+  try {
+    const packageJsonPath = fileURLToPath(
+      new URL("../package.json", import.meta.url),
+    )
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      version?: string
+    }
+    return packageJson.version?.trim() || "0.0.0"
+  } catch {
+    return "0.0.0"
+  }
 }
 
 export function loadServerConfig(
@@ -69,6 +91,19 @@ export function loadServerConfig(
     resolveDefaultDataDirectory("all-api-hub-server")
   const profilesDirectory = resolveProfilesDirectory(dataDirectory)
   const port = Number.parseInt(env.PORT ?? "3000", 10)
+  const appVersion = readPackageVersion()
+  const gitCommitSha =
+    env.ZEABUR_GIT_COMMIT_SHA?.trim() || env.GIT_COMMIT_SHA?.trim() || undefined
+  const gitCommitShortSha = gitCommitSha?.slice(0, 7)
+  const gitBranch =
+    env.ZEABUR_GIT_BRANCH?.trim() || env.GIT_BRANCH?.trim() || undefined
+  const gitCommitMessage =
+    env.ZEABUR_GIT_COMMIT_MESSAGE?.trim() ||
+    env.GIT_COMMIT_MESSAGE?.trim() ||
+    undefined
+  const deploymentVersion = gitCommitShortSha
+    ? `${appVersion}+${gitCommitShortSha}`
+    : appVersion
 
   if (!databaseUrl) {
     throw new Error(
@@ -124,6 +159,12 @@ export function loadServerConfig(
     siteLoginProfiles: parseSiteLoginProfiles(env.SITE_LOGIN_PROFILES_JSON),
     siteLoginProfilesRepo,
     timeZone: env.TZ?.trim() || "Asia/Shanghai",
+    appVersion,
+    deploymentVersion,
+    gitCommitSha,
+    gitCommitShortSha,
+    gitBranch,
+    gitCommitMessage,
   }
 }
 

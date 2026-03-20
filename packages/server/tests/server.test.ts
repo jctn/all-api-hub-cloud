@@ -64,6 +64,12 @@ async function createServer(options: Partial<BuildServerOptions> = {}) {
       },
       siteLoginProfiles: {},
       timeZone: "Asia/Shanghai",
+      appVersion: "0.1.0",
+      deploymentVersion: "0.1.0+test123",
+      gitCommitSha: "test1234567890",
+      gitCommitShortSha: "test123",
+      gitBranch: "main",
+      gitCommitMessage: "Test deployment",
     },
     fetchImpl: async () => new Response("{}", { status: 200 }),
     telegramBotInfo: testBotInfo,
@@ -84,6 +90,10 @@ describe("server routes", () => {
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({
       ok: true,
+      version: "0.1.0+test123",
+      appVersion: "0.1.0",
+      gitCommitShortSha: "test123",
+      gitBranch: "main",
       storageMode: "filesystem",
     })
   })

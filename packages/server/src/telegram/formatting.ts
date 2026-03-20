@@ -159,10 +159,26 @@ export function formatStatusMessage(params: {
   latestRecord?: CheckinRunRecord
   settings: AppSettings
   timeZone: string
+  deploymentVersion: string
+  appVersion: string
+  gitCommitShortSha?: string
+  gitBranch?: string
+  gitCommitMessage?: string
 }): string {
   const lines = [
+    `服务版本: ${params.deploymentVersion}`,
     `当前任务: ${params.task.active ? params.task.label ?? params.task.kind : "空闲"}`,
   ]
+
+  if (params.gitBranch || params.gitCommitShortSha) {
+    lines.push(
+      `部署提交: ${params.gitBranch ?? "unknown"}@${params.gitCommitShortSha ?? "unknown"}`,
+    )
+  }
+
+  if (params.gitCommitMessage) {
+    lines.push(`提交说明: ${truncateTelegramLine(params.gitCommitMessage, 120)}`)
+  }
 
   if (params.task.startedAt) {
     lines.push(`任务开始: ${formatTimestamp(params.task.startedAt, params.timeZone)}`)
@@ -185,6 +201,10 @@ export function formatStatusMessage(params: {
     lines.push(
       `最近签到完成: ${formatTimestamp(params.latestRecord.completedAt, params.timeZone)}`,
     )
+  }
+
+  if (params.deploymentVersion !== params.appVersion) {
+    lines.push(`基础版本: ${params.appVersion}`)
   }
 
   return lines.join("\n")
