@@ -291,13 +291,16 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   }
 
   private async detectManualChallenge(page: Page): Promise<string | null> {
+    const title = await page.title().catch(() => "")
     const bodyText = await page
       .locator("body")
       .innerText({ timeout: 2_000 })
       .catch(() => "")
-    const normalized = bodyText.toLowerCase()
+    const normalized = `${title}\n${bodyText}`.toLowerCase()
 
     if (
+      normalized.includes("请稍候") ||
+      normalized.includes("just a moment") ||
       normalized.includes("turnstile") ||
       normalized.includes("cloudflare") ||
       normalized.includes("captcha")
