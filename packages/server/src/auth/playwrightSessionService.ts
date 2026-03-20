@@ -83,6 +83,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
     await fs.mkdir(this.config.sharedSsoProfileDirectory, { recursive: true })
     await fs.mkdir(this.config.diagnosticsDirectory, { recursive: true })
+    await this.cleanupStaleProfileLocks(this.config.sharedSsoProfileDirectory)
 
     let context: BrowserContext | null = null
     let page: Page | null = null
@@ -531,6 +532,23 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       await locator.click({ timeout: 2_000 }).catch(() => undefined)
       await page.waitForTimeout(300).catch(() => undefined)
     }
+  }
+
+  private async cleanupStaleProfileLocks(directory: string): Promise<void> {
+    const singletonArtifacts = [
+      "SingletonLock",
+      "SingletonSocket",
+      "SingletonCookie",
+    ]
+
+    await Promise.all(
+      singletonArtifacts.map(async (name) => {
+        await fs.rm(path.join(directory, name), {
+          force: true,
+          recursive: true,
+        }).catch(() => undefined)
+      }),
+    )
   }
 
   private pickFlowPage(
