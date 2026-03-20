@@ -104,7 +104,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         timeout: 90_000,
       })
 
-      const flowResult = await this.completeLoginFlow(page, account, profile)
+      const flowResult = await this.completeLoginFlow(
+        context,
+        page,
+        account,
+        profile,
+      )
       if (flowResult.status !== "ready") {
         const diagnosticPath = await this.captureDiagnostic(page, account)
         return {
@@ -118,7 +123,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       const refreshedAccount = await this.captureAuthenticatedAccount(
-        page,
+        flowResult.page,
         context,
         account,
         profile,
@@ -154,11 +159,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   }
 
   private async completeLoginFlow(
+    context: BrowserContext,
     page: Page,
     account: SiteAccount,
     profile: SiteLoginProfile,
   ): Promise<
-    | { status: "ready" }
+    | { status: "ready"; page: Page }
     | { status: "manual_action_required"; message: string }
     | { status: "unsupported_auto_reauth"; message: string }
   > {
@@ -167,12 +173,17 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const deadline = Date.now() + 120_000
 
     while (Date.now() < deadline) {
-      const currentUrl = page.url()
+      const successPage = await this.findTargetPage(context, targetHost, profile)
+      if (successPage) {
+        return { status: "ready", page: successPage }
+      }
+
+      const flowPage =
+        this.pickFlowPage(context, targetHost, linuxdoHost) ?? page
+      const currentUrl = flowPage.url()
       const currentHost = this.getUrlHostname(currentUrl)
 
-      await this.dismissCommonOverlays(page)
-
-      const challengeMessage = await this.detectManualChallenge(page)
+      const challengeMessage = await this.detectManualChallenge(flowPage)
       if (challengeMessage) {
         return {
           status: "manual_action_required",
@@ -180,46 +191,57 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         }
       }
 
-      if (await this.isLoginSuccess(page, targetHost, profile)) {
-        return { status: "ready" }
-      }
-
-      if (currentHost === "github.com" && (await this.isGitHubOtpPage(page))) {
-        await this.submitGitHubTotp(page)
-        continue
-      }
-
-      if (currentHost === "github.com" && (await this.isGitHubLoginPage(page))) {
-        await this.submitGitHubCredentials(page)
+      if (currentHost === "github.com" && (await this.isGitHubOtpPage(flowPage))) {
+        await this.submitGitHubTotp(flowPage)
         continue
       }
 
       if (
         currentHost === "github.com" &&
-        (await this.clickFirstVisible(page, GITHUB_AUTHORIZE_SELECTORS))
+        (await this.isGitHubLoginPage(flowPage))
       ) {
-        await page.waitForLoadState("domcontentloaded").catch(() => undefined)
+        await this.submitGitHubCredentials(flowPage)
+        continue
+      }
+
+      if (
+        currentHost === "github.com" &&
+        (await this.clickFirstVisibleWithPopup(context, flowPage, GITHUB_AUTHORIZE_SELECTORS))
+      ) {
         continue
       }
 
       if (currentHost === linuxdoHost) {
-        if (await this.clickFirstVisible(page, LINUXDO_GITHUB_SELECTORS)) {
-          await page.waitForLoadState("domcontentloaded").catch(() => undefined)
+        if (
+          await this.clickFirstVisibleWithPopup(
+            context,
+            flowPage,
+            LINUXDO_GITHUB_SELECTORS,
+          )
+        ) {
           continue
         }
 
-        await page.waitForTimeout(1_000)
+        await this.dismissCommonOverlays(flowPage)
+        await flowPage.waitForTimeout(1_000)
         continue
       }
 
       if (currentHost === targetHost) {
-        if (await this.clickFirstVisible(page, profile.loginButtonSelectors)) {
-          await page.waitForLoadState("domcontentloaded").catch(() => undefined)
+        if (
+          await this.clickFirstVisibleWithPopup(
+            context,
+            flowPage,
+            profile.loginButtonSelectors,
+          )
+        ) {
           continue
         }
+
+        await this.dismissCommonOverlays(flowPage)
       }
 
-      await page.waitForTimeout(1_000)
+      await flowPage.waitForTimeout(1_000)
     }
 
     return {
@@ -451,6 +473,39 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return false
   }
 
+  private async clickFirstVisibleWithPopup(
+    context: BrowserContext,
+    page: Page,
+    selectors: string[],
+  ): Promise<boolean> {
+    for (const selector of selectors) {
+      const locator = page.locator(selector).first()
+      const count = await locator.count().catch(() => 0)
+      if (count === 0) {
+        continue
+      }
+
+      const visible = await locator.isVisible().catch(() => false)
+      if (!visible) {
+        continue
+      }
+
+      const popupPromise = context.waitForEvent("page", { timeout: 3_000 }).catch(
+        () => null,
+      )
+      await locator.click({ timeout: 5_000 })
+      const popup = await popupPromise
+      if (popup) {
+        await popup.waitForLoadState("domcontentloaded").catch(() => undefined)
+      } else {
+        await page.waitForLoadState("domcontentloaded").catch(() => undefined)
+      }
+      return true
+    }
+
+    return false
+  }
+
   private async dismissCommonOverlays(page: Page): Promise<void> {
     const selectors = [
       "button[aria-label='close']",
@@ -476,6 +531,42 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       await locator.click({ timeout: 2_000 }).catch(() => undefined)
       await page.waitForTimeout(300).catch(() => undefined)
     }
+  }
+
+  private pickFlowPage(
+    context: BrowserContext,
+    targetHost: string,
+    linuxdoHost: string,
+  ): Page | null {
+    const pages = context
+      .pages()
+      .filter((item) => !item.isClosed())
+
+    return (
+      pages.find((item) => this.getUrlHostname(item.url()) === "github.com") ||
+      pages.find((item) => this.getUrlHostname(item.url()) === linuxdoHost) ||
+      pages.find((item) => this.getUrlHostname(item.url()) === targetHost) ||
+      pages[0] ||
+      null
+    )
+  }
+
+  private async findTargetPage(
+    context: BrowserContext,
+    targetHost: string,
+    profile: SiteLoginProfile,
+  ): Promise<Page | null> {
+    for (const candidate of context.pages().filter((item) => !item.isClosed())) {
+      if (this.getUrlHostname(candidate.url()) !== targetHost) {
+        continue
+      }
+
+      if (await this.isLoginSuccess(candidate, targetHost, profile)) {
+        return candidate
+      }
+    }
+
+    return null
   }
 
   private async fillFirst(
