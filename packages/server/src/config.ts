@@ -57,6 +57,8 @@ export interface ServerConfig {
   gitCommitShortSha?: string
   gitBranch?: string
   gitCommitMessage?: string
+  siteLoginProfilesSource: string
+  siteLoginProfilesCount: number
 }
 
 function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {
@@ -165,6 +167,12 @@ export function loadServerConfig(
     gitCommitShortSha,
     gitBranch,
     gitCommitMessage,
+    siteLoginProfilesSource: siteLoginProfilesRepo
+      ? `github://${siteLoginProfilesRepo.owner}/${siteLoginProfilesRepo.name}/${siteLoginProfilesRepo.path}@${siteLoginProfilesRepo.ref}`
+      : "env:SITE_LOGIN_PROFILES_JSON",
+    siteLoginProfilesCount: parseSiteLoginProfiles(env.SITE_LOGIN_PROFILES_JSON)
+      ? Object.keys(parseSiteLoginProfiles(env.SITE_LOGIN_PROFILES_JSON)).length
+      : 0,
   }
 }
 
@@ -186,6 +194,10 @@ export async function resolveServerConfig(
       ...config,
       siteLoginProfiles: parseSiteLoginProfiles(remoteProfiles.raw),
       siteLoginProfilesRepo: null,
+      siteLoginProfilesSource: remoteProfiles.source,
+      siteLoginProfilesCount: Object.keys(
+        parseSiteLoginProfiles(remoteProfiles.raw),
+      ).length,
     }
   } catch (error) {
     if (error instanceof GitHubRepoFileHttpError) {

@@ -209,3 +209,34 @@ export function formatStatusMessage(params: {
 
   return lines.join("\n")
 }
+
+export function formatVersionMessage(params: {
+  deploymentVersion: string
+  appVersion: string
+  gitCommitShortSha?: string
+  gitBranch?: string
+  gitCommitMessage?: string
+  siteLoginProfilesSource: string
+  siteLoginProfilesCount: number
+}): string {
+  const lines = [`服务版本: ${params.deploymentVersion}`]
+
+  if (params.gitBranch || params.gitCommitShortSha) {
+    lines.push(
+      `部署提交: ${params.gitBranch ?? "unknown"}@${params.gitCommitShortSha ?? "unknown"}`,
+    )
+  }
+
+  if (params.gitCommitMessage) {
+    lines.push(`提交说明: ${truncateTelegramLine(params.gitCommitMessage, 120)}`)
+  }
+
+  if (params.deploymentVersion !== params.appVersion) {
+    lines.push(`基础版本: ${params.appVersion}`)
+  }
+
+  lines.push(`登录 profile 来源: ${truncateTelegramLine(params.siteLoginProfilesSource, 180)}`)
+  lines.push(`登录 profile 数量: ${params.siteLoginProfilesCount}`)
+
+  return lines.join("\n")
+}

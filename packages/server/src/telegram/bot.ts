@@ -12,6 +12,7 @@ import {
   formatImportMessage,
   formatRefreshMessage,
   formatStatusMessage,
+  formatVersionMessage,
 } from "./formatting.js"
 import { splitTelegramMessage } from "./messageChunks.js"
 
@@ -192,6 +193,22 @@ export async function createTelegramBot(params: {
         gitCommitShortSha: params.config.gitCommitShortSha,
         gitBranch: params.config.gitBranch,
         gitCommitMessage: params.config.gitCommitMessage,
+      }),
+    )
+  })
+
+  bot.command("version", async (ctx) => {
+    const chatId = ctx.chat?.id
+    await sendText(
+      chatId,
+      formatVersionMessage({
+        deploymentVersion: params.config.deploymentVersion,
+        appVersion: params.config.appVersion,
+        gitCommitShortSha: params.config.gitCommitShortSha,
+        gitBranch: params.config.gitBranch,
+        gitCommitMessage: params.config.gitCommitMessage,
+        siteLoginProfilesSource: params.config.siteLoginProfilesSource,
+        siteLoginProfilesCount: params.config.siteLoginProfilesCount,
       }),
     )
   })

@@ -148,6 +148,8 @@ export async function buildServer(
     gitCommitShortSha: config.gitCommitShortSha ?? null,
     gitBranch: config.gitBranch ?? null,
     gitCommitMessage: config.gitCommitMessage ?? null,
+    siteLoginProfilesSource: config.siteLoginProfilesSource,
+    siteLoginProfilesCount: config.siteLoginProfilesCount,
     storageMode,
     dataDirectory: config.dataDirectory,
     latestMigrationId: migrationResult.latestMigrationId,

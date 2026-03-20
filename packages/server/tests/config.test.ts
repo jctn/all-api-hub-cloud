@@ -69,6 +69,8 @@ describe("loadServerConfig", () => {
     expect(config.gitCommitShortSha).toBe("1234567")
     expect(config.gitBranch).toBe("main")
     expect(config.gitCommitMessage).toBe("Deploy server")
+    expect(config.siteLoginProfilesSource).toBe("env:SITE_LOGIN_PROFILES_JSON")
+    expect(config.siteLoginProfilesCount).toBe(0)
   })
 })
 
@@ -104,5 +106,9 @@ describe("resolveServerConfig", () => {
       loginPath: "/login",
       loginButtonSelectors: ["button:has-text('使用 LinuxDO 继续')"],
     })
+    expect(resolved.siteLoginProfilesSource).toBe(
+      "github://jctn/all-api-hub-private-data/site-login-profiles.json@main",
+    )
+    expect(resolved.siteLoginProfilesCount).toBe(1)
   })
 })

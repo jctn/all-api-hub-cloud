@@ -70,6 +70,8 @@ async function createServer(options: Partial<BuildServerOptions> = {}) {
       gitCommitShortSha: "test123",
       gitBranch: "main",
       gitCommitMessage: "Test deployment",
+      siteLoginProfilesSource: "github://owner/repo/site-login-profiles.json@main",
+      siteLoginProfilesCount: 2,
     },
     fetchImpl: async () => new Response("{}", { status: 200 }),
     telegramBotInfo: testBotInfo,
@@ -94,6 +96,8 @@ describe("server routes", () => {
       appVersion: "0.1.0",
       gitCommitShortSha: "test123",
       gitBranch: "main",
+      siteLoginProfilesSource: "github://owner/repo/site-login-profiles.json@main",
+      siteLoginProfilesCount: 2,
       storageMode: "filesystem",
     })
   })
