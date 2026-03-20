@@ -212,7 +212,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const targetHost = new URL(account.site_url).hostname.toLowerCase()
     const linuxdoHost = new URL(this.config.github.linuxdoBaseUrl).hostname.toLowerCase()
     const deadline = Date.now() + 120_000
-    const visitedHosts = new Set<string>()
+    const visitedUrls = new Set<string>()
+    const loggedSelectorDiagnostics = new Set<string>()
 
     while (Date.now() < deadline) {
       const successPage = await this.findTargetPage(context, targetHost, profile)
@@ -225,11 +226,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         this.pickFlowPage(context, targetHost, linuxdoHost) ?? page
       const currentUrl = flowPage.url()
       const currentHost = this.getUrlHostname(currentUrl)
-      const currentHostLabel = currentHost || currentUrl || "about:blank"
+      const currentTitle = await flowPage.title().catch(() => "")
+      const currentPageLabel = `${currentUrl || "about:blank"}${
+        currentTitle ? ` | 标题=${currentTitle}` : ""
+      }`
 
-      if (currentHostLabel && !visitedHosts.has(currentHostLabel)) {
-        visitedHosts.add(currentHostLabel)
-        await this.reportProgress(options, `当前流程页面：${currentHostLabel}`)
+      if (currentUrl && !visitedUrls.has(currentUrl)) {
+        visitedUrls.add(currentUrl)
+        await this.reportProgress(options, `当前流程页面：${currentPageLabel}`)
       }
 
       const challengeMessage = await this.detectManualChallenge(flowPage)
@@ -265,6 +269,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       if (currentHost === linuxdoHost) {
+        await this.dismissCommonOverlays(flowPage)
         if (
           await this.clickFirstVisibleWithPopup(
             context,
@@ -276,12 +281,19 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           continue
         }
 
-        await this.dismissCommonOverlays(flowPage)
+        if (!loggedSelectorDiagnostics.has(currentUrl)) {
+          loggedSelectorDiagnostics.add(currentUrl)
+          await this.reportProgress(
+            options,
+            `Linux.do 页面未命中 GitHub 入口；可见按钮=${await this.describeVisibleActionTexts(flowPage)}`,
+          )
+        }
         await flowPage.waitForTimeout(1_000)
         continue
       }
 
       if (currentHost === targetHost) {
+        await this.dismissCommonOverlays(flowPage)
         if (
           await this.clickFirstVisibleWithPopup(
             context,
@@ -293,7 +305,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           continue
         }
 
-        await this.dismissCommonOverlays(flowPage)
+        if (!loggedSelectorDiagnostics.has(currentUrl)) {
+          loggedSelectorDiagnostics.add(currentUrl)
+          await this.reportProgress(
+            options,
+            `站点页面未命中登录入口；可见按钮=${await this.describeVisibleActionTexts(flowPage)}`,
+          )
+        }
       }
 
       await flowPage.waitForTimeout(1_000)
@@ -593,6 +611,24 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       await locator.click({ timeout: 2_000 }).catch(() => undefined)
       await page.waitForTimeout(300).catch(() => undefined)
     }
+  }
+
+  private async describeVisibleActionTexts(page: Page): Promise<string> {
+    const items = await page
+      .locator("button, a")
+      .evaluateAll((elements) =>
+        elements
+          .map((element) => ({
+            text: (element.textContent || "").trim().replace(/\s+/gu, " "),
+            tag: element.tagName.toLowerCase(),
+          }))
+          .filter((item) => item.text.length > 0)
+          .slice(0, 8)
+          .map((item) => `${item.tag}:${item.text.slice(0, 24)}`),
+      )
+      .catch(() => [])
+
+    return items.length > 0 ? items.join(" | ") : "无"
   }
 
   private async cleanupStaleProfileLocks(directory: string): Promise<void> {
