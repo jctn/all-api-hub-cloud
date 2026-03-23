@@ -479,7 +479,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
       if (result.userAgent) {
         await this.reportProgress(options, `同步 UA: ${result.userAgent.slice(0, 40)}...`)
-        await page.setExtraHTTPHeaders({ "User-Agent": result.userAgent })
+        await Promise.race([
+          page.setExtraHTTPHeaders({ "User-Agent": result.userAgent }),
+          new Promise((r) => setTimeout(r, 3_000)),
+        ]).catch(() => undefined)
       }
 
       const cleanUrl = this.stripCfChallengeParams(page.url())
