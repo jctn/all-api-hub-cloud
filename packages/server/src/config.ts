@@ -37,11 +37,6 @@ export interface GitHubSsoConfig {
   linuxdoBaseUrl: string
 }
 
-export interface CloudflyerConfig {
-  serviceUrl: string
-  clientKey: string
-}
-
 export interface ServerConfig {
   port: number
   databaseUrl: string
@@ -53,7 +48,7 @@ export interface ServerConfig {
   telegram: TelegramConfig
   importRepo: ImportRepoConfig
   github: GitHubSsoConfig
-  cloudflyer: CloudflyerConfig | null
+  flareSolverrUrl: string | null
   siteLoginProfiles: SiteLoginProfileMap
   siteLoginProfilesRepo?: ImportRepoConfig | null
   timeZone: string
@@ -140,12 +135,7 @@ export function loadServerConfig(
       }
     : null
 
-  const cloudflyerServiceUrl = env.CLOUDFLYER_SERVICE_URL?.trim()
-  const cloudflyerClientKey = env.CLOUDFLYER_CLIENT_KEY?.trim()
-  const cloudflyer =
-    cloudflyerServiceUrl && cloudflyerClientKey
-      ? { serviceUrl: cloudflyerServiceUrl, clientKey: cloudflyerClientKey }
-      : null
+  const flareSolverrUrl = env.FLARESOLVERR_URL?.trim() || null
 
   return {
     port: Number.isFinite(port) ? port : 3000,
@@ -171,7 +161,7 @@ export function loadServerConfig(
       totpSecret: requiredEnv(env, "GITHUB_TOTP_SECRET"),
       linuxdoBaseUrl: env.LINUXDO_BASE_URL?.trim() || "https://linux.do",
     },
-    cloudflyer,
+    flareSolverrUrl,
     siteLoginProfiles: parseSiteLoginProfiles(env.SITE_LOGIN_PROFILES_JSON),
     siteLoginProfilesRepo,
     timeZone: env.TZ?.trim() || "Asia/Shanghai",

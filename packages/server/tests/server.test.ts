@@ -62,7 +62,7 @@ async function createServer(options: Partial<BuildServerOptions> = {}) {
         totpSecret: "JBSWY3DPEHPK3PXP",
         linuxdoBaseUrl: "https://linux.do",
       },
-      cloudflyer: null,
+      flareSolverrUrl: null,
       siteLoginProfiles: {},
       timeZone: "Asia/Shanghai",
       appVersion: "0.1.0",

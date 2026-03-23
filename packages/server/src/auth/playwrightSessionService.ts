@@ -14,7 +14,7 @@ import { chromium, type BrowserContext, type Page } from "playwright"
 
 import type { ServerConfig } from "../config.js"
 import { sanitizeFileName } from "../utils/text.js"
-import { solveCloudflareChallenge } from "./cloudflyerClient.js"
+import { solveCloudflareChallenge } from "./flareSolverrClient.js"
 import { generateGitHubTotp } from "./githubTotp.js"
 import {
   matchSiteLoginProfile,
@@ -239,9 +239,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       if (await this.detectCloudflareChallenge(flowPage)) {
-        if (!cloudflyerAttempted && this.config.cloudflyer) {
+        if (!cloudflyerAttempted && this.config.flareSolverrUrl) {
           cloudflyerAttempted = true
-          if (await this.solveCloudflareWithCloudflyer(context, flowPage, options)) {
+          if (await this.solveCloudflareWithFlareSolverr(context, flowPage, options)) {
             continue
           }
         }
@@ -437,56 +437,54 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     )
   }
 
-  private async solveCloudflareWithCloudflyer(
+  private async solveCloudflareWithFlareSolverr(
     context: BrowserContext,
     page: Page,
     options: SessionRefreshOptions,
   ): Promise<boolean> {
-    if (!this.config.cloudflyer) return false
+    if (!this.config.flareSolverrUrl) return false
 
     try {
-      const challengeUrl = new URL(page.url())
       await this.reportProgress(
         options,
-        "检测到 Cloudflare 拦截，正在通过 cloudflyer 自动破解",
+        "检测到 Cloudflare 拦截，正在通过 FlareSolverr 自动破解",
       )
 
-      const userAgent = await page
-        .evaluate(() => navigator.userAgent)
-        .catch(() => "")
-      const solution = await solveCloudflareChallenge(
-        this.config.cloudflyer,
-        challengeUrl.toString(),
-        userAgent,
+      const cookies = await solveCloudflareChallenge(
+        this.config.flareSolverrUrl,
+        page.url(),
         this.fetchImpl,
-        (msg) => this.reportProgress(options, `[cloudflyer] ${msg}`),
+        (msg) => this.reportProgress(options, `[FlareSolverr] ${msg}`),
       )
 
-      if (!solution) {
-        await this.reportProgress(options, "cloudflyer 自动破解失败")
+      if (!cookies) {
+        await this.reportProgress(options, "FlareSolverr 自动破解失败")
         return false
       }
 
-      await context.addCookies([
-        {
-          name: "cf_clearance",
-          value: solution.cfClearance,
-          domain: challengeUrl.hostname,
-          path: "/",
-          secure: challengeUrl.protocol === "https:",
-        },
-      ])
+      await context.addCookies(
+        cookies.map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path,
+          expires: c.expires,
+          httpOnly: c.httpOnly,
+          secure: c.secure,
+          sameSite: c.sameSite as "Strict" | "Lax" | "None",
+        })),
+      )
 
       await this.reportProgress(
         options,
-        "已注入 cf_clearance，重新加载页面",
+        `已注入 ${cookies.length} 个 cookie，重新加载页面`,
       )
       await page
         .reload({ waitUntil: "domcontentloaded", timeout: 60_000 })
         .catch(() => undefined)
       return true
     } catch {
-      await this.reportProgress(options, "cloudflyer 自动破解异常")
+      await this.reportProgress(options, "FlareSolverr 自动破解异常")
       return false
     }
   }
