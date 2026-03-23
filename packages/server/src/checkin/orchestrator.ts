@@ -16,7 +16,7 @@ import {
   type SessionRefreshResult,
   type SiteSessionRefresher,
 } from "../auth/playwrightSessionService.js"
-import { matchSiteLoginProfile } from "../auth/siteLoginProfiles.js"
+import { matchOrDefaultSiteLoginProfile } from "../auth/siteLoginProfiles.js"
 import type { ServerConfig } from "../config.js"
 import { classifyCheckinResultForReauth } from "./authRecovery.js"
 
@@ -114,28 +114,36 @@ export class CheckinOrchestrator {
       })
 
       const hasProfile = Boolean(
-        matchSiteLoginProfile(account.site_url, this.config.siteLoginProfiles),
+        matchOrDefaultSiteLoginProfile(account.site_url, this.config.siteLoginProfiles, account.site_type),
       )
       const classification = classifyCheckinResultForReauth(result, hasProfile)
 
       if (classification.retryable) {
-        const refreshResult = await this.sessionRefresher.refreshSiteSession(account)
-
-        if (refreshResult.status === "refreshed") {
-          refreshedAccountIds.push(account.id)
-          const refreshedAccount =
-            refreshResult.account ??
-            (await this.repository.getAccountById(account.id)) ??
-            account
-
-          result = await executeCheckinAccount({
-            repository: this.repository,
-            account: refreshedAccount,
-            mode: "manual",
-            fetchImpl: this.fetchImpl,
-          })
+        const hoursSinceLastSync = (Date.now() - account.last_sync_time) / 3_600_000
+        if (hoursSinceLastSync < 24) {
+          result = {
+            ...result,
+            message: `${result.message}（24小时内已刷新，跳过自动续期）`,
+          }
         } else {
-          result = buildRefreshFailureResult(account, refreshResult)
+          const refreshResult = await this.sessionRefresher.refreshSiteSession(account)
+
+          if (refreshResult.status === "refreshed") {
+            refreshedAccountIds.push(account.id)
+            const refreshedAccount =
+              refreshResult.account ??
+              (await this.repository.getAccountById(account.id)) ??
+              account
+
+            result = await executeCheckinAccount({
+              repository: this.repository,
+              account: refreshedAccount,
+              mode: "manual",
+              fetchImpl: this.fetchImpl,
+            })
+          } else {
+            result = buildRefreshFailureResult(account, refreshResult)
+          }
         }
       } else if (classification.type === "unsupported_auto_reauth") {
         result = {

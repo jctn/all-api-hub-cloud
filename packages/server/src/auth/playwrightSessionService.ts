@@ -17,7 +17,7 @@ import { sanitizeFileName } from "../utils/text.js"
 import { solveCloudflareChallenge } from "./flareSolverrClient.js"
 import { generateGitHubTotp } from "./githubTotp.js"
 import {
-  matchSiteLoginProfile,
+  matchOrDefaultSiteLoginProfile,
   type SiteLoginProfile,
 } from "./siteLoginProfiles.js"
 
@@ -90,9 +90,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     account: SiteAccount,
     options: SessionRefreshOptions = {},
   ): Promise<SessionRefreshResult> {
-    const profile = matchSiteLoginProfile(
+    const profile = matchOrDefaultSiteLoginProfile(
       account.site_url,
       this.config.siteLoginProfiles,
+      account.site_type,
     )
     if (!profile) {
       return {

@@ -1,3 +1,5 @@
+import { isNewApiFamilySiteType } from "@all-api-hub/core"
+
 export interface SiteLoginProfile {
   hostname: string
   loginPath: string
@@ -112,5 +114,40 @@ export function matchSiteLoginProfile(
     }
   }
 
+  return null
+}
+
+const DEFAULT_NEW_API_LOGIN_PROFILE: SiteLoginProfile = {
+  hostname: "__default_new_api__",
+  loginPath: "/login",
+  loginButtonSelectors: [
+    "button:has-text('使用 LinuxDO 继续')",
+    "button:has-text('LinuxDO')",
+    "a:has-text('LinuxDO')",
+    "button:has-text('Sign in')",
+    "a:has-text('Sign in')",
+  ],
+  successUrlPatterns: ["/token", "/dashboard", "/panel", "/console"],
+  tokenStorageKeys: ["access_token", "token", "api_token", "authorization"],
+  postLoginSelectors: [],
+}
+
+export function matchOrDefaultSiteLoginProfile(
+  siteUrl: string,
+  profiles: SiteLoginProfileMap,
+  siteType?: string,
+): SiteLoginProfile | null {
+  const explicit = matchSiteLoginProfile(siteUrl, profiles)
+  if (explicit) return explicit
+  if (siteType && isNewApiFamilySiteType(siteType)) {
+    try {
+      return {
+        ...DEFAULT_NEW_API_LOGIN_PROFILE,
+        hostname: new URL(siteUrl).hostname.toLowerCase(),
+      }
+    } catch {
+      return null
+    }
+  }
   return null
 }
