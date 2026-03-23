@@ -416,12 +416,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     if (
-      normalized.includes("security key") ||
-      normalized.includes("passkey") ||
-      normalized.includes("verify your identity") ||
-      normalized.includes("device verification") ||
-      normalized.includes("邮件验证") ||
-      normalized.includes("邮箱验证")
+      this.getUrlHostname(page.url()) === "github.com" &&
+      (normalized.includes("security key") ||
+        normalized.includes("passkey") ||
+        normalized.includes("verify your identity") ||
+        normalized.includes("device verification") ||
+        normalized.includes("邮件验证") ||
+        normalized.includes("邮箱验证"))
     ) {
       return "GitHub 出现附加身份验证，当前自动化路径已停止"
     }
