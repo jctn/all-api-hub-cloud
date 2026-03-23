@@ -259,6 +259,15 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         continue
       }
 
+      if (
+        currentHost === "github.com" &&
+        (await this.isGitHubLoginPage(flowPage))
+      ) {
+        await this.reportProgress(options, "检测到 GitHub 登录页，提交用户名和密码")
+        await this.submitGitHubCredentials(flowPage)
+        continue
+      }
+
       if (currentHost === "github.com" && (await this.isGitHubTwoFactorChoicePage(flowPage))) {
         const pageElements = await this.describeVisibleActionTexts(flowPage)
         const pageInputs = await flowPage
@@ -290,15 +299,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           await this.reportProgress(options, "未找到 Authenticator 入口，等待 3 秒")
           await flowPage.waitForTimeout(3_000)
         }
-        continue
-      }
-
-      if (
-        currentHost === "github.com" &&
-        (await this.isGitHubLoginPage(flowPage))
-      ) {
-        await this.reportProgress(options, "检测到 GitHub 登录页，提交用户名和密码")
-        await this.submitGitHubCredentials(flowPage)
         continue
       }
 
