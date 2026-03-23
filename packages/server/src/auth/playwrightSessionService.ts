@@ -260,7 +260,23 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       if (currentHost === "github.com" && (await this.isGitHubTwoFactorChoicePage(flowPage))) {
-        await this.reportProgress(options, "检测到 GitHub 2FA 选择页，尝试切换到 Authenticator App")
+        const pageElements = await this.describeVisibleActionTexts(flowPage)
+        const pageInputs = await flowPage
+          .locator("input")
+          .evaluateAll((els) =>
+            els
+              .map((e) => {
+                const input = e as HTMLInputElement
+                return `${input.type}[name=${input.name}]`
+              })
+              .slice(0, 8)
+              .join(", "),
+          )
+          .catch(() => "")
+        await this.reportProgress(
+          options,
+          `GitHub 2FA 页面诊断；按钮=${pageElements}；输入框=${pageInputs || "无"}；URL=${this.getUrlPathname(flowPage.url())}`,
+        )
         const clicked = await this.clickFirstVisible(flowPage, [
           "a[href*='two-factor/app']",
           "button:has-text('authenticator')",
@@ -268,9 +284,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           "a:has-text('Use your authenticator app')",
         ])
         if (clicked) {
+          await this.reportProgress(options, "已点击 Authenticator 入口")
           await flowPage.waitForLoadState("domcontentloaded").catch(() => undefined)
         } else {
-          await flowPage.waitForTimeout(1_000)
+          await this.reportProgress(options, "未找到 Authenticator 入口，等待 3 秒")
+          await flowPage.waitForTimeout(3_000)
         }
         continue
       }
