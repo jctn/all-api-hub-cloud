@@ -463,6 +463,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         return false
       }
 
+      await this.reportProgress(options, `注入 ${result.cookies.length} 个 cookie`)
       await context.addCookies(
         result.cookies.map((c) => ({
           name: c.name,
@@ -477,17 +478,16 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       )
 
       if (result.userAgent) {
+        await this.reportProgress(options, `同步 UA: ${result.userAgent.slice(0, 40)}...`)
         await page.setExtraHTTPHeaders({ "User-Agent": result.userAgent })
       }
 
-      await this.reportProgress(
-        options,
-        `已注入 ${result.cookies.length} 个 cookie${result.userAgent ? " 并同步 UA" : ""}，重新加载页面`,
-      )
       const cleanUrl = this.stripCfChallengeParams(page.url())
+      await this.reportProgress(options, `导航至: ${cleanUrl.slice(0, 80)}...`)
       await page
-        .goto(cleanUrl, { waitUntil: "domcontentloaded", timeout: 30_000 })
+        .goto(cleanUrl, { waitUntil: "domcontentloaded", timeout: 15_000 })
         .catch(() => undefined)
+      await this.reportProgress(options, "页面导航完成")
       return true
     } catch {
       await this.reportProgress(options, "FlareSolverr 自动破解异常")
