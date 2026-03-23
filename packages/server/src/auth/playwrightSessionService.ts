@@ -26,6 +26,7 @@ const LINUXDO_GITHUB_SELECTORS = [
   "button[data-provider='github']",
   "button[title*='GitHub']",
   "a.btn-social.github",
+  "button:has-text('GitHub')",
 ]
 
 const GITHUB_LOGIN_FIELD_SELECTORS = ["#login_field", "input[name='login']"]
