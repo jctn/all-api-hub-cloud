@@ -484,13 +484,24 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         options,
         `已注入 ${result.cookies.length} 个 cookie${result.userAgent ? " 并同步 UA" : ""}，重新加载页面`,
       )
+      const cleanUrl = this.stripCfChallengeParams(page.url())
       await page
-        .reload({ waitUntil: "domcontentloaded", timeout: 60_000 })
+        .goto(cleanUrl, { waitUntil: "domcontentloaded", timeout: 30_000 })
         .catch(() => undefined)
       return true
     } catch {
       await this.reportProgress(options, "FlareSolverr 自动破解异常")
       return false
+    }
+  }
+
+  private stripCfChallengeParams(url: string): string {
+    try {
+      const u = new URL(url)
+      u.searchParams.delete("__cf_chl_rt_tk")
+      return u.toString()
+    } catch {
+      return url
     }
   }
 
