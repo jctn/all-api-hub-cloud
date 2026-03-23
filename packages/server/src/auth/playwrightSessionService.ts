@@ -217,7 +217,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const visitedUrls = new Set<string>()
     const loggedSelectorDiagnostics = new Set<string>()
     let flareSolverrAttempts = 0
-    const MAX_FLARESOLVERR_ATTEMPTS = 4
+    const MAX_FLARESOLVERR_ATTEMPTS = 8
 
     while (Date.now() < deadline) {
       const successPage = await this.findTargetPage(context, targetHost, profile)
