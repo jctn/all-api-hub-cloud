@@ -20,6 +20,11 @@ interface FlareSolverrResponse {
   }
 }
 
+export interface FlareSolverrResult {
+  cookies: FlareSolverrCookie[]
+  userAgent: string
+}
+
 const REQUEST_TIMEOUT_MS = 90_000
 
 export async function solveCloudflareChallenge(
@@ -27,7 +32,7 @@ export async function solveCloudflareChallenge(
   targetUrl: string,
   fetchImpl: typeof fetch = fetch,
   onLog?: (msg: string) => void,
-): Promise<FlareSolverrCookie[] | null> {
+): Promise<FlareSolverrResult | null> {
   const log = onLog ?? (() => {})
   const endpoint = `${serviceUrl.replace(/\/+$/, "")}/v1`
 
@@ -67,7 +72,7 @@ export async function solveCloudflareChallenge(
     }
 
     log(`获取 ${cookies.length} 个 cookie`)
-    return cookies
+    return { cookies, userAgent: data.solution?.userAgent ?? "" }
   } catch (err) {
     log(`请求失败: ${err instanceof Error ? err.message : String(err)}`)
     return null

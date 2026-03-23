@@ -450,20 +450,20 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         "检测到 Cloudflare 拦截，正在通过 FlareSolverr 自动破解",
       )
 
-      const cookies = await solveCloudflareChallenge(
+      const result = await solveCloudflareChallenge(
         this.config.flareSolverrUrl,
         page.url(),
         this.fetchImpl,
         (msg) => this.reportProgress(options, `[FlareSolverr] ${msg}`),
       )
 
-      if (!cookies) {
+      if (!result) {
         await this.reportProgress(options, "FlareSolverr 自动破解失败")
         return false
       }
 
       await context.addCookies(
-        cookies.map((c) => ({
+        result.cookies.map((c) => ({
           name: c.name,
           value: c.value,
           domain: c.domain,
@@ -475,9 +475,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         })),
       )
 
+      if (result.userAgent) {
+        await page.setExtraHTTPHeaders({ "User-Agent": result.userAgent })
+      }
+
       await this.reportProgress(
         options,
-        `已注入 ${cookies.length} 个 cookie，重新加载页面`,
+        `已注入 ${result.cookies.length} 个 cookie${result.userAgent ? " 并同步 UA" : ""}，重新加载页面`,
       )
       await page
         .reload({ waitUntil: "domcontentloaded", timeout: 60_000 })
