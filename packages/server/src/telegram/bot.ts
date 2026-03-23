@@ -104,6 +104,25 @@ export async function createTelegramBot(params: {
     }
   }
 
+  bot.command("help", async (ctx) => {
+    const chatId = ctx.chat?.id
+    await sendText(
+      chatId,
+      [
+        "All API Hub 指令列表：",
+        "",
+        "/help — 显示本帮助",
+        "/accounts — 查看账号列表",
+        "/status — 查看系统状态与任务信息",
+        "/version — 查看版本与部署信息",
+        "/sync_import — 从 GitHub 仓库同步导入账号",
+        "/checkin_all — 批量签到全部可签到账号",
+        "/checkin <accountId> — 单账号签到",
+        "/auth_refresh <accountId|all> — 刷新账号会话",
+      ].join("\n"),
+    )
+  })
+
   bot.command("sync_import", async (ctx) => {
     const chatId = ctx.chat?.id
     await startTask(
