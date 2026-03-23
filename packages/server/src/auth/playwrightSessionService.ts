@@ -259,6 +259,22 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         continue
       }
 
+      if (currentHost === "github.com" && (await this.isGitHubTwoFactorChoicePage(flowPage))) {
+        await this.reportProgress(options, "检测到 GitHub 2FA 选择页，尝试切换到 Authenticator App")
+        const clicked = await this.clickFirstVisible(flowPage, [
+          "a[href*='two-factor/app']",
+          "button:has-text('authenticator')",
+          "a:has-text('authenticator')",
+          "a:has-text('Use your authenticator app')",
+        ])
+        if (clicked) {
+          await flowPage.waitForLoadState("domcontentloaded").catch(() => undefined)
+        } else {
+          await flowPage.waitForTimeout(1_000)
+        }
+        continue
+      }
+
       if (
         currentHost === "github.com" &&
         (await this.isGitHubLoginPage(flowPage))
@@ -556,17 +572,20 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   }
 
   private async isGitHubOtpPage(page: Page): Promise<boolean> {
-    if (this.getUrlPathname(page.url()).includes("two-factor")) {
-      return true
-    }
-
     for (const selector of GITHUB_TOTP_SELECTORS) {
       if (await this.hasVisibleSelector(page, selector)) {
         return true
       }
     }
-
     return false
+  }
+
+  private async isGitHubTwoFactorChoicePage(page: Page): Promise<boolean> {
+    return (
+      this.getUrlHostname(page.url()) === "github.com" &&
+      this.getUrlPathname(page.url()).includes("two-factor") &&
+      !(await this.isGitHubOtpPage(page))
+    )
   }
 
   private async submitGitHubCredentials(page: Page): Promise<void> {
