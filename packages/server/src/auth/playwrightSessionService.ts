@@ -253,15 +253,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         return { status: "manual_action_required", message: cfMsg }
       }
 
-      const challengeMessage = await this.detectManualChallenge(flowPage)
-      if (challengeMessage) {
-        await this.reportProgress(options, challengeMessage)
-        return {
-          status: "manual_action_required",
-          message: challengeMessage,
-        }
-      }
-
       if (currentHost === "github.com" && (await this.isGitHubOtpPage(flowPage))) {
         await this.reportProgress(options, "检测到 GitHub 二步验证页，提交 TOTP")
         await this.submitGitHubTotp(flowPage)
@@ -283,6 +274,15 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       ) {
         await this.reportProgress(options, "检测到 GitHub 授权确认页，提交授权")
         continue
+      }
+
+      const challengeMessage = await this.detectManualChallenge(flowPage)
+      if (challengeMessage) {
+        await this.reportProgress(options, challengeMessage)
+        return {
+          status: "manual_action_required",
+          message: challengeMessage,
+        }
       }
 
       if (this.isSameOrSubdomain(currentHost, linuxdoHost)) {
