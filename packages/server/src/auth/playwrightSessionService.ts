@@ -215,7 +215,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const deadline = Date.now() + 120_000
     const visitedUrls = new Set<string>()
     const loggedSelectorDiagnostics = new Set<string>()
-    let flareSolverrAttemptedHosts = new Set<string>()
+    let flareSolverrAttempts = 0
+    const MAX_FLARESOLVERR_ATTEMPTS = 4
 
     while (Date.now() < deadline) {
       const successPage = await this.findTargetPage(context, targetHost, profile)
@@ -239,10 +240,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       if (await this.detectCloudflareChallenge(flowPage)) {
-        const cfHost = this.getUrlHostname(flowPage.url())
-        if (!flareSolverrAttemptedHosts.has(cfHost) && this.config.flareSolverrUrl) {
-          flareSolverrAttemptedHosts.add(cfHost)
+        if (flareSolverrAttempts < MAX_FLARESOLVERR_ATTEMPTS && this.config.flareSolverrUrl) {
+          flareSolverrAttempts++
           if (await this.solveCloudflareWithFlareSolverr(context, flowPage, options)) {
+            await flowPage.waitForTimeout(3_000)
             continue
           }
         }
