@@ -406,6 +406,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     await this.reportProgress(options, "提取 cookie 与 access token")
     const cookieHeader = buildCookieHeader(await context.cookies([targetBaseUrl]))
     const accessToken = await this.extractAccessToken(page, profile)
+    await this.reportProgress(
+      options,
+      `token=${accessToken ? accessToken.slice(0, 16) + "..." : "空"} cookie=${cookieHeader ? cookieHeader.length + "字符" : "空"}`,
+    )
     const now = Date.now()
 
     const nextAccount: SiteAccount = {
@@ -425,6 +429,19 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     await this.reportProgress(options, "调用 /api/user/self 校验登录状态")
+    const selfUrl = joinUrl(normalizeBaseUrl(account.site_url), "/api/user/self")
+    const preCheck = await this.fetchImpl(selfUrl, {
+      method: "GET",
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+        "Content-Type": "application/json",
+      },
+    }).catch((e: unknown) => ({ status: 0, statusText: e instanceof Error ? e.message : String(e), ok: false }))
+    await this.reportProgress(
+      options,
+      `/api/user/self 预检: HTTP ${preCheck.status} ${("statusText" in preCheck ? preCheck.statusText : "")}`,
+    )
     const synced = await fetchNewApiSelf({
       account: nextAccount,
       fetchImpl: this.fetchImpl,
