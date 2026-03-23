@@ -29,6 +29,14 @@ const LINUXDO_GITHUB_SELECTORS = [
   "button:has-text('GitHub')",
 ]
 
+const LINUXDO_AUTHORIZE_SELECTORS = [
+  "a:has-text('允许')",
+  "button:has-text('允许')",
+  "a:has-text('Allow')",
+  "button:has-text('Allow')",
+  "button:has-text('Authorize')",
+]
+
 const GITHUB_LOGIN_FIELD_SELECTORS = ["#login_field", "input[name='login']"]
 const GITHUB_PASSWORD_SELECTORS = ["#password", "input[name='password']"]
 const GITHUB_TOTP_SELECTORS = [
@@ -321,6 +329,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
       if (this.isSameOrSubdomain(currentHost, linuxdoHost)) {
         await this.dismissCommonOverlays(flowPage)
+        if (await this.clickFirstVisible(flowPage, LINUXDO_AUTHORIZE_SELECTORS)) {
+          await this.reportProgress(options, "检测到 Linux.do Connect 授权页，点击允许")
+          await flowPage.waitForLoadState("domcontentloaded").catch(() => undefined)
+          continue
+        }
         if (
           await this.clickFirstVisibleWithPopup(
             context,
