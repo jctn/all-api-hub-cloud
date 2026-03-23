@@ -1,4 +1,4 @@
-import { isNewApiFamilySiteType } from "@all-api-hub/core"
+import { isAnyrouterSiteType, isNewApiFamilySiteType } from "@all-api-hub/core"
 
 export interface SiteLoginProfile {
   hostname: string
@@ -139,7 +139,7 @@ export function matchOrDefaultSiteLoginProfile(
 ): SiteLoginProfile | null {
   const explicit = matchSiteLoginProfile(siteUrl, profiles)
   if (explicit) return explicit
-  if (siteType && isNewApiFamilySiteType(siteType)) {
+  if (siteType && (isNewApiFamilySiteType(siteType) || isAnyrouterSiteType(siteType))) {
     try {
       return {
         ...DEFAULT_NEW_API_LOGIN_PROFILE,
