@@ -2,10 +2,10 @@
   "anyrouter.top": {
     "loginPath": "/login",
     "loginButtonSelectors": [
+      "button:has-text('Sign in')",
+      "a:has-text('Sign in')",
       "button:has-text('使用 LinuxDO 继续')",
-      "button:has-text('使用 GitHub 继续')",
-      "text=使用 LinuxDO 继续",
-      "text=使用 GitHub 继续"
+      "button:has-text('使用 GitHub 继续')"
     ],
     "successUrlPatterns": [
       "/token",
