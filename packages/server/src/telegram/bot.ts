@@ -118,7 +118,9 @@ export async function createTelegramBot(params: {
         "/sync_import — 从 GitHub 仓库同步导入账号",
         "/checkin_all — 批量签到全部可签到账号",
         "/checkin <accountId> — 单账号签到",
-        "/auth_refresh <accountId|all> — 刷新账号会话",
+        "/auth_refresh <accountId|all> [-log] — 刷新账号会话（-log 输出详细日志）",
+        "/disable <accountId> — 禁用账号（不再签到和刷新）",
+        "/enable <accountId> — 启用账号",
       ].join("\n"),
     )
   })
@@ -175,7 +177,9 @@ export async function createTelegramBot(params: {
   bot.command("auth_refresh", async (ctx) => {
     const chatId = ctx.chat?.id
     const input = ctx.match.trim()
-    const accountId = !input || input.toLowerCase() === "all" ? undefined : input
+    const verbose = input.includes("-log")
+    const cleanInput = input.replace(/-log/gi, "").trim()
+    const accountId = !cleanInput || cleanInput.toLowerCase() === "all" ? undefined : cleanInput
 
     await startTask(
       "会话刷新任务",
@@ -183,7 +187,7 @@ export async function createTelegramBot(params: {
       accountId ? `刷新账号会话: ${accountId}` : "刷新全部账号会话",
       () =>
         params.orchestrator.refreshSessions(accountId, {
-          onProgress: (text) => sendText(chatId, text),
+          onProgress: verbose ? (text) => sendText(chatId, text) : undefined,
         }),
       (result) => formatRefreshMessage(result, params.config.timeZone),
       (text) => sendText(chatId, text),
@@ -233,6 +237,38 @@ export async function createTelegramBot(params: {
         siteLoginProfilesCount: params.config.siteLoginProfilesCount,
       }),
     )
+  })
+
+  bot.command("disable", async (ctx) => {
+    const chatId = ctx.chat?.id
+    const accountId = ctx.match.trim()
+    if (!accountId) {
+      await sendText(chatId, "用法：/disable <accountId>")
+      return
+    }
+    const account = await params.repository.getAccountById(accountId)
+    if (!account) {
+      await sendText(chatId, `未找到账号：${accountId}`)
+      return
+    }
+    await params.repository.saveAccount({ ...account, disabled: true, updated_at: Date.now() })
+    await sendText(chatId, `已禁用：${account.site_name} (${account.id})`)
+  })
+
+  bot.command("enable", async (ctx) => {
+    const chatId = ctx.chat?.id
+    const accountId = ctx.match.trim()
+    if (!accountId) {
+      await sendText(chatId, "用法：/enable <accountId>")
+      return
+    }
+    const account = await params.repository.getAccountById(accountId)
+    if (!account) {
+      await sendText(chatId, `未找到账号：${accountId}`)
+      return
+    }
+    await params.repository.saveAccount({ ...account, disabled: false, updated_at: Date.now() })
+    await sendText(chatId, `已启用：${account.site_name} (${account.id})`)
   })
 
   if (!params.botInfo) {

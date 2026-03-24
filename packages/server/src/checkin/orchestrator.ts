@@ -182,7 +182,7 @@ export class CheckinOrchestrator {
     const allAccounts = await this.repository.getAccounts()
     const selectedAccounts = accountId
       ? allAccounts.filter((account) => account.id === accountId)
-      : allAccounts
+      : allAccounts.filter((account) => !account.disabled)
     const startedAt = Date.now()
     const results: SessionRefreshAccountResult[] = []
 
