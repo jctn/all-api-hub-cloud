@@ -13,6 +13,7 @@ import {
   normalizeMessage,
   parseJsonResponse,
   resolvePayloadMessage,
+  resolveRewardFromData,
 } from "./shared.js"
 
 function isAlreadyCheckedMessage(message: string): boolean {
@@ -70,10 +71,15 @@ export async function runNewApiCheckin(params: {
     const message = resolvePayloadMessage(payload, parsed.rawText)
 
     if (success) {
+      const rewardFromData = resolveRewardFromData(payload?.data)
+      const fullMessage =
+        rewardFromData && !message.includes(rewardFromData)
+          ? `${message || "签到成功"}，${rewardFromData}`
+          : message || "签到成功"
       return {
         ...buildBaseResult(account, startedAt),
         status: CheckinResultStatus.Success,
-        message: message || "签到成功",
+        message: fullMessage,
         completedAt: Date.now(),
         rawMessage: message || undefined,
         checkInUrl,

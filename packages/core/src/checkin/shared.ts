@@ -72,6 +72,16 @@ export function resolvePayloadMessage(
   return normalizeMessage(rawText)
 }
 
+export function resolveRewardFromData(data: unknown): string {
+  if (typeof data === "number" && data > 0) return `获得 ${data} 积分`
+  if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>
+    const quota = obj.quota ?? obj.reward ?? obj.amount
+    if (typeof quota === "number" && quota > 0) return `获得 ${quota} 积分`
+  }
+  return ""
+}
+
 export function buildAccountHeaders(
   account: SiteAccount,
   options?: {
