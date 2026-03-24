@@ -4,6 +4,7 @@ import {
   CheckinResultStatus,
   executeCheckinAccount,
   hasUsableAuth,
+  isAnyrouterSiteType,
   isSupportedCheckinSiteType,
   summarizeCheckinResults,
   type CheckinAccountResult,
@@ -130,17 +131,31 @@ export class CheckinOrchestrator {
 
           if (refreshResult.status === "refreshed") {
             refreshedAccountIds.push(account.id)
-            const refreshedAccount =
-              refreshResult.account ??
-              (await this.repository.getAccountById(account.id)) ??
-              account
 
-            result = await executeCheckinAccount({
-              repository: this.repository,
-              account: refreshedAccount,
-              mode: "manual",
-              fetchImpl: this.fetchImpl,
-            })
+            if (isAnyrouterSiteType(account.site_type)) {
+              result = {
+                accountId: account.id,
+                siteName: account.site_name,
+                siteUrl: account.site_url,
+                siteType: account.site_type,
+                status: CheckinResultStatus.Success,
+                message: "登录成功即签到（AnyRouter）",
+                startedAt: result.startedAt,
+                completedAt: Date.now(),
+              }
+            } else {
+              const refreshedAccount =
+                refreshResult.account ??
+                (await this.repository.getAccountById(account.id)) ??
+                account
+
+              result = await executeCheckinAccount({
+                repository: this.repository,
+                account: refreshedAccount,
+                mode: "manual",
+                fetchImpl: this.fetchImpl,
+              })
+            }
           } else {
             result = buildRefreshFailureResult(account, refreshResult)
           }
