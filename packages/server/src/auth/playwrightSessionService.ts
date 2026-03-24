@@ -647,6 +647,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return await page
       .evaluate((keys) => {
         const storageCandidates = [window.localStorage, window.sessionStorage]
+
         for (const storage of storageCandidates) {
           for (const key of keys) {
             const rawValue = storage.getItem(key)
@@ -669,6 +670,39 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             }
 
             return rawValue.trim().replace(/^Bearer\s+/iu, "")
+          }
+        }
+
+        const tokenPattern = /access[_-]?token|token|jwt|auth/i
+        for (const storage of storageCandidates) {
+          for (let i = 0; i < storage.length; i++) {
+            const key = storage.key(i)
+            if (!key) continue
+            const value = storage.getItem(key)
+            if (!value || value.length < 12) continue
+
+            if (tokenPattern.test(key)) {
+              return value.trim().replace(/^Bearer\s+/iu, "")
+            }
+
+            try {
+              const parsed = JSON.parse(value) as unknown
+              if (parsed && typeof parsed === "object") {
+                for (const [nestedKey, nestedValue] of Object.entries(
+                  parsed as Record<string, unknown>,
+                )) {
+                  if (
+                    tokenPattern.test(nestedKey) &&
+                    typeof nestedValue === "string" &&
+                    nestedValue.length > 12
+                  ) {
+                    return nestedValue.trim().replace(/^Bearer\s+/iu, "")
+                  }
+                }
+              }
+            } catch {
+              // not JSON
+            }
           }
         }
 

@@ -120,7 +120,7 @@ export class CheckinOrchestrator {
 
       if (classification.retryable) {
         const hoursSinceLastSync = (Date.now() - account.last_sync_time) / 3_600_000
-        if (hoursSinceLastSync < 24) {
+        if (options.mode === "scheduled" && hoursSinceLastSync < 24) {
           result = {
             ...result,
             message: `${result.message}（24小时内已刷新，跳过自动续期）`,
