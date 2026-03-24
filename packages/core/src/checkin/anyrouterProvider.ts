@@ -76,15 +76,18 @@ export async function runAnyrouterCheckin(params: {
     const message = resolvePayloadMessage(payload, parsed.rawText)
 
     if (!success) {
+      const isHtmlResponse = parsed.rawText.trimStart().startsWith("<")
       return {
         ...buildBaseResult(account, startedAt),
         status: CheckinResultStatus.Failed,
         code:
-          parsed.statusCode === 401 || parsed.statusCode === 403
+          parsed.statusCode === 401 || parsed.statusCode === 403 || isHtmlResponse
             ? "auth_invalid"
             : "checkin_failed",
-        message: message || "签到失败，请检查站点登录状态",
-        rawMessage: message || parsed.rawText || undefined,
+        message: isHtmlResponse
+          ? "站点返回 HTML（可能被 Cloudflare 拦截），需通过浏览器登录"
+          : message || "签到失败，请检查站点登录状态",
+        rawMessage: isHtmlResponse ? undefined : message || parsed.rawText || undefined,
         completedAt: Date.now(),
         checkInUrl,
       }
