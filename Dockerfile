@@ -14,11 +14,21 @@ RUN npm ci
 
 FROM deps AS build
 
+ARG TG_BOT_TOKEN
+ARG TG_ADMIN_CHAT_ID
+ARG ZEABUR_GIT_BRANCH
+ARG ZEABUR_GIT_COMMIT_SHA
+ARG ZEABUR_GIT_COMMIT_MESSAGE
+ARG GIT_BRANCH
+ARG GIT_COMMIT_SHA
+ARG GIT_COMMIT_MESSAGE
+ARG ZEABUR_SERVICE_NAME
+ARG TZ=Asia/Shanghai
+
 COPY packages/core packages/core
 COPY packages/server packages/server
 
-RUN npm run build --workspace @all-api-hub/core --workspace @all-api-hub/server
-RUN npm prune --omit=dev
+RUN node packages/server/scripts/zeabur-build-notify.mjs
 
 FROM mcr.microsoft.com/playwright:v1.58.2-noble AS runtime
 

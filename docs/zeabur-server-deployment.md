@@ -72,6 +72,7 @@ SITE_LOGIN_PROFILES_JSON
 - `INTERNAL_ADMIN_TOKEN` 建议使用 48 到 64 位随机字符串
 - `GITHUB_TOTP_SECRET` 必须是 GitHub TOTP setup key，不是一次性验证码
 - `SITE_LOGIN_PROFILES_JSON` 首轮部署可以直接填 `{}`；只有在开始配置自动续期时，才需要替换成单行 JSON
+- 如果你启用了本文档后面提到的“部署阶段 Telegram 通知”，`TG_BOT_TOKEN` 与 `TG_ADMIN_CHAT_ID` 也要能在 Docker build 阶段读取到；当前代码会复用同一只管理员私聊机器人
 
 可直接照着填写的首轮 Secret 模板：
 
@@ -222,6 +223,29 @@ GET https://<your-zeabur-domain>/internal/healthz
   "latestMigrationId": "001_init_postgres_storage"
 }
 ```
+
+## 5.1 部署阶段 Telegram 通知
+
+当前代码支持在 Zeabur 的以下阶段向管理员私聊发送通知：
+
+- 开始构建
+- 构建成功
+- 构建失败
+- 启动中
+- 运行中
+
+实现方式：
+
+- 构建阶段：根目录 `Dockerfile` 的 `build` stage 会运行 `packages/server/scripts/zeabur-build-notify.mjs`
+- 运行阶段：`packages/server/src/index.ts` 会在服务初始化前发送“启动中”，在 `server.listen(...)` 成功后发送“运行中”
+- 所有通知都走当前已有的 `TG_BOT_TOKEN + TG_ADMIN_CHAT_ID`
+- 通知发送失败只会打印 warning / error，不会阻断 Docker build 或服务启动
+
+注意事项：
+
+- 因为“开始构建 / 构建成功 / 构建失败”发生在应用尚未启动时，所以这三类消息不是复用 `grammy` 机器人实例，而是由构建脚本直接调用 Telegram Bot API
+- `运行中` 的定义是服务已经完成初始化并成功监听端口，不额外等待 Zeabur 控制台状态变绿
+- 如果 Zeabur 的 Docker build 环境没有把 `TG_BOT_TOKEN` 或 `TG_ADMIN_CHAT_ID` 注入到 build stage，构建本身仍会继续，只是构建期通知会降级为日志告警
 
 9. 设置 Telegram webhook：
 
