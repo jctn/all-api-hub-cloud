@@ -143,6 +143,84 @@ describe("CheckinOrchestrator", () => {
     expect(requests).toContain("Bearer fresh-token")
   })
 
+  it("refreshes scheduled accounts even when they were synced recently", async () => {
+    const recentAccount: SiteAccount = {
+      ...baseAccount,
+      last_sync_time: Date.now(),
+    }
+    const repository = await createRepositoryWithAccounts([recentAccount])
+    const requests: string[] = []
+    let refreshAttempts = 0
+
+    const refresher: SiteSessionRefresher = {
+      async refreshSiteSession(account): Promise<SessionRefreshResult> {
+        refreshAttempts += 1
+        return {
+          status: "refreshed",
+          message: "ok",
+          account: {
+            ...account,
+            account_info: {
+              ...account.account_info,
+              access_token: "fresh-token",
+            },
+          },
+        }
+      },
+    }
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {
+          "demo.example.com": {
+            hostname: "demo.example.com",
+            loginPath: "/login",
+            loginButtonSelectors: ["button.login"],
+            successUrlPatterns: ["/console"],
+            tokenStorageKeys: ["access_token"],
+            postLoginSelectors: [".avatar"],
+          },
+        },
+      },
+      refresher,
+      async (_input, init) => {
+        const headers = new Headers(init?.headers)
+        requests.push(headers.get("Authorization") || "")
+        const auth = headers.get("Authorization")
+
+        if (auth === "Bearer expired-token") {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              message: "无权进行此操作",
+            }),
+            { status: 401 },
+          )
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: "签到成功",
+          }),
+          { status: 200 },
+        )
+      },
+    )
+
+    const result = await orchestrator.runCheckinBatch({
+      mode: "scheduled",
+    })
+
+    expect(refreshAttempts).toBe(1)
+    expect(result.refreshedAccountIds).toEqual(["acc-1"])
+    expect(result.record.summary.success).toBe(1)
+    expect(result.record.results[0].message).not.toContain("24小时内已刷新")
+    expect(requests).toContain("Bearer expired-token")
+    expect(requests).toContain("Bearer fresh-token")
+  })
+
   it("emits progress messages during refreshSessions", async () => {
     const repository = await createRepositoryWithAccounts([baseAccount])
     const progress: string[] = []

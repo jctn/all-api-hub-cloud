@@ -120,45 +120,37 @@ export class CheckinOrchestrator {
       const classification = classifyCheckinResultForReauth(result, hasProfile)
 
       if (classification.retryable) {
-        const hoursSinceLastSync = (Date.now() - account.last_sync_time) / 3_600_000
-        if (options.mode === "scheduled" && hoursSinceLastSync < 24) {
-          result = {
-            ...result,
-            message: `${result.message}（24小时内已刷新，跳过自动续期）`,
-          }
-        } else {
-          const refreshResult = await this.sessionRefresher.refreshSiteSession(account)
+        const refreshResult = await this.sessionRefresher.refreshSiteSession(account)
 
-          if (refreshResult.status === "refreshed") {
-            refreshedAccountIds.push(account.id)
+        if (refreshResult.status === "refreshed") {
+          refreshedAccountIds.push(account.id)
 
-            if (isAnyrouterSiteType(account.site_type)) {
-              result = {
-                accountId: account.id,
-                siteName: account.site_name,
-                siteUrl: account.site_url,
-                siteType: account.site_type,
-                status: CheckinResultStatus.Success,
-                message: "登录成功即签到（AnyRouter）",
-                startedAt: result.startedAt,
-                completedAt: Date.now(),
-              }
-            } else {
-              const refreshedAccount =
-                refreshResult.account ??
-                (await this.repository.getAccountById(account.id)) ??
-                account
-
-              result = await executeCheckinAccount({
-                repository: this.repository,
-                account: refreshedAccount,
-                mode: "manual",
-                fetchImpl: this.fetchImpl,
-              })
+          if (isAnyrouterSiteType(account.site_type)) {
+            result = {
+              accountId: account.id,
+              siteName: account.site_name,
+              siteUrl: account.site_url,
+              siteType: account.site_type,
+              status: CheckinResultStatus.Success,
+              message: "登录成功即签到（AnyRouter）",
+              startedAt: result.startedAt,
+              completedAt: Date.now(),
             }
           } else {
-            result = buildRefreshFailureResult(account, refreshResult)
+            const refreshedAccount =
+              refreshResult.account ??
+              (await this.repository.getAccountById(account.id)) ??
+              account
+
+            result = await executeCheckinAccount({
+              repository: this.repository,
+              account: refreshedAccount,
+              mode: "manual",
+              fetchImpl: this.fetchImpl,
+            })
           }
+        } else {
+          result = buildRefreshFailureResult(account, refreshResult)
         }
       } else if (classification.type === "unsupported_auto_reauth") {
         result = {
