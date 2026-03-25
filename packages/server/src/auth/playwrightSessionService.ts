@@ -54,6 +54,8 @@ const GITHUB_AUTHORIZE_SELECTORS = [
   "input[name='authorize']",
   "button[type='submit']",
 ]
+const AUTH_SELF_VALIDATION_ATTEMPTS = 5
+const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
 
 export type SessionRefreshStatus =
   | "refreshed"
@@ -405,11 +407,55 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     await this.reportProgress(options, "提取 cookie 与 access token")
+    await this.reportProgress(options, "调用 /api/user/self 校验登录状态")
+    const synced = await this.validateAuthenticatedAccount(
+      page,
+      context,
+      account,
+      profile,
+    )
+
+    if (!synced?.account) {
+      await this.reportProgress(options, "/api/user/self 校验失败")
+      return null
+    }
+
+    await this.reportProgress(options, "/api/user/self 校验成功")
+    const finalAccessToken =
+      synced.snapshot.account_info.access_token ||
+      synced.account.account_info.access_token ||
+      ""
+    const finalAuthType = finalAccessToken
+      ? AuthType.AccessToken
+      : synced.snapshot.cookieAuth?.sessionCookie
+        ? AuthType.Cookie
+        : synced.account.authType
+
+    return {
+      ...synced.account,
+      updated_at: synced.snapshot.updated_at,
+      last_sync_time: synced.snapshot.last_sync_time,
+      authType: finalAuthType,
+      account_info: {
+        ...synced.account.account_info,
+        access_token: finalAccessToken,
+      },
+      cookieAuth: synced.snapshot.cookieAuth,
+    }
+  }
+
+  private async buildAuthenticatedAccountSnapshot(
+    context: BrowserContext,
+    page: Page,
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+  ): Promise<SiteAccount> {
+    const targetBaseUrl = normalizeBaseUrl(account.site_url)
     const cookieHeader = buildCookieHeader(await context.cookies([targetBaseUrl]))
     const accessToken = await this.extractAccessToken(page, profile)
     const now = Date.now()
 
-    const nextAccount: SiteAccount = {
+    return {
       ...account,
       updated_at: now,
       last_sync_time: now,
@@ -424,37 +470,39 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       },
       cookieAuth: cookieHeader ? { sessionCookie: cookieHeader } : account.cookieAuth,
     }
+  }
 
-    await this.reportProgress(options, "调用 /api/user/self 校验登录状态")
-    const synced = await fetchNewApiSelf({
-      account: nextAccount,
-      fetchImpl: this.fetchImpl,
-    })
+  private async validateAuthenticatedAccount(
+    page: Page,
+    context: BrowserContext,
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+  ): Promise<{ account: SiteAccount; snapshot: SiteAccount } | null> {
+    for (let attempt = 1; attempt <= AUTH_SELF_VALIDATION_ATTEMPTS; attempt += 1) {
+      const snapshot = await this.buildAuthenticatedAccountSnapshot(
+        context,
+        page,
+        account,
+        profile,
+      )
+      const synced = await fetchNewApiSelf({
+        account: snapshot,
+        fetchImpl: this.fetchImpl,
+      })
 
-    if (!synced) {
-      await this.reportProgress(options, "/api/user/self 校验失败")
-      return null
+      if (synced) {
+        return {
+          account: synced,
+          snapshot,
+        }
+      }
+
+      if (attempt < AUTH_SELF_VALIDATION_ATTEMPTS) {
+        await page.waitForTimeout(AUTH_SELF_VALIDATION_RETRY_DELAY_MS)
+      }
     }
 
-    await this.reportProgress(options, "/api/user/self 校验成功")
-
-    const finalAccessToken = accessToken || synced.account_info.access_token || ""
-
-    return {
-      ...synced,
-      updated_at: now,
-      last_sync_time: now,
-      authType: finalAccessToken
-        ? AuthType.AccessToken
-        : cookieHeader
-          ? AuthType.Cookie
-          : synced.authType,
-      account_info: {
-        ...synced.account_info,
-        access_token: finalAccessToken,
-      },
-      cookieAuth: cookieHeader ? { sessionCookie: cookieHeader } : synced.cookieAuth,
-    }
+    return null
   }
 
   private async detectManualChallenge(page: Page): Promise<string | null> {
