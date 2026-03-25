@@ -83,6 +83,26 @@ describe("runNewApiCheckin", () => {
     expect(result.status).toBe(CheckinResultStatus.Success)
   })
 
+  it("appends reward details when the provider returns string amounts in payload.data", async () => {
+    const result = await runNewApiCheckin({
+      account: baseAccount,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            message: "签到成功",
+            data: {
+              amount: "0.5",
+            },
+          }),
+          { status: 200 },
+        ),
+    })
+
+    expect(result.status).toBe(CheckinResultStatus.Success)
+    expect(result.message).toContain("0.5")
+  })
+
   it("recognizes already-checked responses", async () => {
     const result = await runNewApiCheckin({
       account: baseAccount,

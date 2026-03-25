@@ -73,12 +73,73 @@ export function resolvePayloadMessage(
 }
 
 export function resolveRewardFromData(data: unknown): string {
-  if (typeof data === "number" && data > 0) return `获得 ${data} 积分`
-  if (data && typeof data === "object") {
-    const obj = data as Record<string, unknown>
-    const quota = obj.quota ?? obj.reward ?? obj.amount
-    if (typeof quota === "number" && quota > 0) return `获得 ${quota} 积分`
+  const rewardKeys = [
+    "quota",
+    "reward",
+    "amount",
+    "bonus",
+    "points",
+    "score",
+    "credit",
+    "credits",
+    "increaseQuota",
+    "rewardAmount",
+  ]
+
+  const normalizeRewardValue = (value: unknown): string => {
+    if (typeof value === "number" && value > 0) {
+      return `获得 ${value} 积分`
+    }
+
+    if (typeof value !== "string") {
+      return ""
+    }
+
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return ""
+    }
+
+    if (/^\+?\d+(?:\.\d+)?$/u.test(trimmed)) {
+      return `获得 ${trimmed.replace(/^\+/u, "")} 积分`
+    }
+
+    if (/(获得|奖励|赠送|积分|点|额度|余额|元|刀|usd|￥|¥)/iu.test(trimmed)) {
+      return trimmed
+    }
+
+    return ""
   }
+
+  if (typeof data === "number" || typeof data === "string") {
+    return normalizeRewardValue(data)
+  }
+
+  if (!data || typeof data !== "object") {
+    return ""
+  }
+
+  const obj = data as Record<string, unknown>
+  for (const key of rewardKeys) {
+    const reward = normalizeRewardValue(obj[key])
+    if (reward) {
+      return reward
+    }
+  }
+
+  for (const key of rewardKeys) {
+    const nested = obj[key]
+    if (nested && typeof nested === "object") {
+      const nestedObj = nested as Record<string, unknown>
+      for (const nestedKey of rewardKeys) {
+        const reward = normalizeRewardValue(nestedObj[nestedKey])
+        if (reward) {
+          return reward
+        }
+      }
+    }
+  }
+
   return ""
 }
 
