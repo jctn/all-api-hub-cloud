@@ -14,6 +14,7 @@ import {
   runNewApiCheckin,
   runWongCheckin,
 } from "../src/index.js"
+import { toLocalDayKey } from "../src/utils/date.js"
 
 const baseAccount = {
   id: "acc-1",
@@ -292,6 +293,77 @@ describe("runWongCheckin", () => {
 })
 
 describe("executeCheckinRun", () => {
+  it("treats scheduled accounts as already checked when local state says today is completed", async () => {
+    const repository = await createRepositoryWithAccounts([
+      {
+        ...baseAccount,
+        checkIn: {
+          ...baseAccount.checkIn,
+          autoCheckInEnabled: true,
+          siteStatus: {
+            isCheckedInToday: true,
+            lastCheckInDate: toLocalDayKey(),
+            lastDetectedAt: Date.now(),
+          },
+        },
+      },
+    ])
+
+    const fetchMock = async () => {
+      throw new Error("scheduled already-checked accounts should not hit the network")
+    }
+
+    const record = await executeCheckinRun({
+      repository,
+      initiatedBy: "server",
+      mode: "scheduled",
+      fetchImpl: fetchMock,
+    })
+
+    expect(record.summary.alreadyChecked).toBe(1)
+    expect(record.summary.failed).toBe(0)
+    expect(record.results[0].status).toBe(CheckinResultStatus.AlreadyChecked)
+    expect(record.results[0].message).toBe("今天已经签到")
+  })
+
+  it("still checks the remote site in manual mode even if local state says today is completed", async () => {
+    const repository = await createRepositoryWithAccounts([
+      {
+        ...baseAccount,
+        checkIn: {
+          ...baseAccount.checkIn,
+          autoCheckInEnabled: true,
+          siteStatus: {
+            isCheckedInToday: true,
+            lastCheckInDate: toLocalDayKey(),
+            lastDetectedAt: Date.now(),
+          },
+        },
+      },
+    ])
+
+    const requestedUrls: string[] = []
+
+    const record = await executeCheckinRun({
+      repository,
+      initiatedBy: "server",
+      mode: "manual",
+      fetchImpl: async (input) => {
+        requestedUrls.push(String(input))
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: "签到成功",
+          }),
+          { status: 200 },
+        )
+      },
+    })
+
+    expect(requestedUrls.some((url) => url.endsWith("/api/user/checkin"))).toBe(true)
+    expect(record.summary.success).toBe(1)
+  })
+
   it("syncs account_info.id from /api/user/self before check-in when the imported account lacks a user id", async () => {
     const repository = await createRepositoryWithAccounts([
       {

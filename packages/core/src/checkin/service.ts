@@ -14,6 +14,7 @@ import {
 } from "../models/siteTypes.js"
 import { type StorageRepository } from "../storage/repository.js"
 import { hasUsableAuth } from "../utils/auth.js"
+import { toLocalDayKey } from "../utils/date.js"
 import { runAnyrouterCheckin } from "./anyrouterProvider.js"
 import {
   fetchNewApiSelf,
@@ -103,6 +104,34 @@ function buildSkipResult(
   }
 }
 
+function buildAlreadyCheckedResult(account: SiteAccount, message: string): CheckinAccountResult {
+  const now = Date.now()
+  return {
+    accountId: account.id,
+    siteName: account.site_name,
+    siteUrl: account.site_url,
+    siteType: account.site_type,
+    status: CheckinResultStatus.AlreadyChecked,
+    message,
+    startedAt: now,
+    completedAt: now,
+  }
+}
+
+function isLocallyCheckedInToday(account: SiteAccount): boolean {
+  const siteStatus = account.checkIn.siteStatus
+  if (!siteStatus) {
+    return false
+  }
+
+  const today = toLocalDayKey()
+  if (siteStatus.lastCheckInDate === today) {
+    return true
+  }
+
+  return Boolean(siteStatus.isCheckedInToday && !siteStatus.lastCheckInDate)
+}
+
 function hasUsableCheckinAuth(account: SiteAccount): boolean {
   if (isAnyrouterSiteType(account.site_type)) {
     return Boolean(account.cookieAuth?.sessionCookie?.trim())
@@ -129,6 +158,10 @@ function evaluateEligibility(
 
   if (mode === "scheduled" && account.checkIn.autoCheckInEnabled === false) {
     return buildSkipResult(account, "auto_checkin_disabled", "已关闭自动签到")
+  }
+
+  if (mode === "scheduled" && isLocallyCheckedInToday(account)) {
+    return buildAlreadyCheckedResult(account, "今天已经签到")
   }
 
   if (!hasUsableCheckinAuth(account)) {
