@@ -738,6 +738,64 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return await page
       .evaluate((keys) => {
         const storageCandidates = [window.localStorage, window.sessionStorage]
+        const tokenPattern = /access[_-]?token|token|jwt|auth/i
+        const normalizeToken = (value: string): string =>
+          value.trim().replace(/^Bearer\s+/iu, "")
+
+        const findTokenInNode = (
+          value: unknown,
+          path: string[] = [],
+          depth = 0,
+        ): string => {
+          if (depth > 6 || value == null) {
+            return ""
+          }
+
+          if (typeof value === "string") {
+            const trimmed = value.trim()
+            if (!trimmed) {
+              return ""
+            }
+
+            try {
+              return findTokenInNode(JSON.parse(trimmed), path, depth + 1)
+            } catch {
+              const currentKey = path[path.length - 1] || ""
+              return tokenPattern.test(currentKey) ? normalizeToken(trimmed) : ""
+            }
+          }
+
+          if (Array.isArray(value)) {
+            for (let index = 0; index < value.length; index += 1) {
+              const candidate = findTokenInNode(
+                value[index],
+                [...path, String(index)],
+                depth + 1,
+              )
+              if (candidate) {
+                return candidate
+              }
+            }
+            return ""
+          }
+
+          if (typeof value === "object") {
+            for (const [nestedKey, nestedValue] of Object.entries(
+              value as Record<string, unknown>,
+            )) {
+              const candidate = findTokenInNode(
+                nestedValue,
+                [...path, nestedKey],
+                depth + 1,
+              )
+              if (candidate) {
+                return candidate
+              }
+            }
+          }
+
+          return ""
+        }
 
         for (const storage of storageCandidates) {
           for (const key of keys) {
@@ -746,25 +804,15 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               continue
             }
 
-            try {
-              const parsed = JSON.parse(rawValue) as unknown
-              if (
-                parsed &&
-                typeof parsed === "object" &&
-                "access_token" in parsed &&
-                typeof parsed.access_token === "string"
-              ) {
-                return parsed.access_token.trim()
-              }
-            } catch {
-              // Keep raw values as a fallback.
+            const nestedToken = findTokenInNode(rawValue, [key])
+            if (nestedToken) {
+              return nestedToken
             }
 
-            return rawValue.trim().replace(/^Bearer\s+/iu, "")
+            return normalizeToken(rawValue)
           }
         }
 
-        const tokenPattern = /access[_-]?token|token|jwt|auth/i
         for (const storage of storageCandidates) {
           for (let i = 0; i < storage.length; i++) {
             const key = storage.key(i)
@@ -773,26 +821,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             if (!value || value.length < 12) continue
 
             if (tokenPattern.test(key)) {
-              return value.trim().replace(/^Bearer\s+/iu, "")
+              return normalizeToken(value)
             }
 
-            try {
-              const parsed = JSON.parse(value) as unknown
-              if (parsed && typeof parsed === "object") {
-                for (const [nestedKey, nestedValue] of Object.entries(
-                  parsed as Record<string, unknown>,
-                )) {
-                  if (
-                    tokenPattern.test(nestedKey) &&
-                    typeof nestedValue === "string" &&
-                    nestedValue.length > 12
-                  ) {
-                    return nestedValue.trim().replace(/^Bearer\s+/iu, "")
-                  }
-                }
-              }
-            } catch {
-              // not JSON
+            const nestedToken = findTokenInNode(value, [key])
+            if (nestedToken) {
+              return nestedToken
             }
           }
         }
@@ -865,6 +899,65 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           status: string
         }
 
+        const tokenPattern = /access[_-]?token|token|jwt|auth/i
+        const normalizeToken = (value: string): string =>
+          value.trim().replace(/^Bearer\s+/iu, "")
+
+        const findNestedTokenPath = (
+          value: unknown,
+          path: string[] = [],
+          depth = 0,
+        ): string | null => {
+          if (depth > 6 || value == null) {
+            return null
+          }
+
+          if (typeof value === "string") {
+            const trimmed = value.trim()
+            if (!trimmed) {
+              return null
+            }
+
+            try {
+              return findNestedTokenPath(JSON.parse(trimmed), path, depth + 1)
+            } catch {
+              const currentKey = path[path.length - 1] || ""
+              return tokenPattern.test(currentKey) ? path.join(".") : null
+            }
+          }
+
+          if (Array.isArray(value)) {
+            for (let index = 0; index < value.length; index += 1) {
+              const candidate = findNestedTokenPath(
+                value[index],
+                [...path, String(index)],
+                depth + 1,
+              )
+              if (candidate) {
+                return candidate
+              }
+            }
+            return null
+          }
+
+          if (typeof value === "object") {
+            for (const [nestedKey, nestedValue] of Object.entries(
+              value as Record<string, unknown>,
+            )) {
+              const candidate = findNestedTokenPath(
+                nestedValue,
+                [...path, nestedKey],
+                depth + 1,
+              )
+              if (candidate) {
+                return candidate
+              }
+            }
+          }
+
+          return null
+        }
+
         const summarizeValue = (rawValue: string): string => {
           const trimmed = rawValue.trim()
           if (!trimmed) {
@@ -877,6 +970,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
           try {
             const parsed = JSON.parse(trimmed) as unknown
+            const nestedTokenPath = findNestedTokenPath(parsed)
+            if (nestedTokenPath) {
+              return `nested-token(${nestedTokenPath})`
+            }
+
             if (typeof parsed === "string") {
               return parsed.trim().length >= 12
                 ? "json-string-token-like"
@@ -949,7 +1047,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           ...collectEntries(window.sessionStorage, "sessionStorage", tokenStorageKeys),
         ]
 
-        const tokenPattern = /access[_-]?token|token|jwt|auth/i
         const tokenLikeEntries: TokenStorageDiagnosticEntry[] = []
         const collectTokenLikeEntries = (
           storage: Storage,
@@ -966,10 +1063,17 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               continue
             }
 
+            const nestedTokenPath = findNestedTokenPath(rawValue, [key])
+            if (!tokenPattern.test(key) && !nestedTokenPath) {
+              continue
+            }
+
             tokenLikeEntries.push({
               storage: storageName,
               key,
-              status: summarizeValue(rawValue),
+              status: nestedTokenPath
+                ? `nested-token(${nestedTokenPath})`
+                : summarizeValue(rawValue),
             })
           }
         }

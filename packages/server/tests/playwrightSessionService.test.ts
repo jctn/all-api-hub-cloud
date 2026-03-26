@@ -92,6 +92,43 @@ const baseConfig: ServerConfig = {
   siteLoginProfilesCount: 0,
 }
 
+function createStorage(entries: Record<string, string>): Storage {
+  const keys = Object.keys(entries)
+  return {
+    get length() {
+      return keys.length
+    },
+    clear() {
+      for (const key of keys) {
+        delete entries[key]
+      }
+      keys.splice(0, keys.length)
+    },
+    getItem(key: string) {
+      return Object.prototype.hasOwnProperty.call(entries, key) ? entries[key] : null
+    },
+    key(index: number) {
+      return keys[index] ?? null
+    },
+    removeItem(key: string) {
+      if (!Object.prototype.hasOwnProperty.call(entries, key)) {
+        return
+      }
+      delete entries[key]
+      const nextIndex = keys.indexOf(key)
+      if (nextIndex >= 0) {
+        keys.splice(nextIndex, 1)
+      }
+    },
+    setItem(key: string, value: string) {
+      if (!Object.prototype.hasOwnProperty.call(entries, key)) {
+        keys.push(key)
+      }
+      entries[key] = value
+    },
+  }
+}
+
 describe("PlaywrightSiteSessionService", () => {
   it("retries /api/user/self after login until the session becomes readable", async () => {
     const progress: string[] = []
@@ -306,6 +343,91 @@ describe("PlaywrightSiteSessionService", () => {
 
     expect(result?.account_info.access_token).toBe("fresh-token")
     expect(waits).toEqual([1000, 1000])
+  })
+
+  it("extracts access tokens from nested storage payloads under generic keys", async () => {
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async (input, init) => {
+        if (typeof input === "string" && input.endsWith("/api/user/self")) {
+          const headers = new Headers(init?.headers)
+          const auth = headers.get("Authorization")
+          return new Response(
+            JSON.stringify({
+              success: auth === "Bearer nested-token",
+              data:
+                auth === "Bearer nested-token"
+                  ? {
+                      id: 1,
+                      username: "alice",
+                      quota: 42,
+                    }
+                  : null,
+              message: auth === "Bearer nested-token" ? "" : "未登录且未提供 access token",
+            }),
+            { status: auth === "Bearer nested-token" ? 200 : 401 },
+          )
+        }
+
+        throw new Error(`unexpected fetch input: ${String(input)}`)
+      },
+    )
+
+    const context = {
+      async cookies() {
+        return []
+      },
+    }
+    const page = {
+      url() {
+        return baseAccount.site_url
+      },
+      async evaluate<TArg, TResult>(
+        fn: (arg: TArg) => TResult,
+        arg: TArg,
+      ): Promise<TResult> {
+        const previousWindow = (globalThis as typeof globalThis & { window?: Window }).window
+        ;(globalThis as typeof globalThis & { window?: Window }).window = {
+          localStorage: createStorage({
+            user: JSON.stringify({
+              profile: {
+                session: {
+                  access_token: "nested-token",
+                },
+              },
+            }),
+          }),
+          sessionStorage: createStorage({}),
+          location: { href: baseAccount.site_url },
+        } as unknown as Window
+
+        try {
+          return await fn(arg)
+        } finally {
+          if (previousWindow === undefined) {
+            delete (globalThis as typeof globalThis & { window?: Window }).window
+          } else {
+            ;(globalThis as typeof globalThis & { window?: Window }).window = previousWindow
+          }
+        }
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    const result = await (service as unknown as {
+      captureAuthenticatedAccount: (
+        page: typeof page,
+        context: typeof context,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<SiteAccount | null>
+    }).captureAuthenticatedAccount(page, context, baseAccount, baseProfile, {})
+
+    expect(result?.account_info.access_token).toBe("nested-token")
   })
 
   it("reports storage diagnostics when login succeeds but token extraction still fails", async () => {
