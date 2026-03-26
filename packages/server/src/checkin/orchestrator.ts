@@ -3,6 +3,7 @@ import crypto from "node:crypto"
 import {
   CheckinResultStatus,
   executeCheckinAccount,
+  fetchNewApiTodayIncome,
   hasUsableAuth,
   isAnyrouterSiteType,
   resolveRewardFromAccountDiff,
@@ -128,10 +129,21 @@ export class CheckinOrchestrator {
           refreshedAccountIds.push(account.id)
 
           if (isAnyrouterSiteType(account.site_type)) {
-            const refreshedAccount =
+            let refreshedAccount =
               refreshResult.account ??
               (await this.repository.getAccountById(account.id)) ??
               account
+            const syncedTodayIncome = await fetchNewApiTodayIncome({
+              account: refreshedAccount,
+              fetchImpl: this.fetchImpl,
+            }).catch(() => refreshedAccount.account_info.today_income)
+            refreshedAccount = {
+              ...refreshedAccount,
+              account_info: {
+                ...refreshedAccount.account_info,
+                today_income: syncedTodayIncome,
+              },
+            }
             const rewardFromDiff = resolveRewardFromAccountDiff(account, refreshedAccount)
             const todayIncomeDetail = resolveTodayIncomeDetail(refreshedAccount)
             const detailParts = [rewardFromDiff, todayIncomeDetail].filter(Boolean)

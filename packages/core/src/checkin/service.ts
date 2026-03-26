@@ -19,6 +19,7 @@ import { resolveRewardFromAccountDiff, resolveTodayIncomeDetail } from "./shared
 import { runAnyrouterCheckin } from "./anyrouterProvider.js"
 import {
   fetchNewApiSelf,
+  fetchNewApiTodayIncome,
   markAccountCheckedIn,
   runNewApiCheckin,
 } from "./newApiProvider.js"
@@ -217,6 +218,17 @@ async function runForAccount(
     const synced = await fetchNewApiSelf({ account: nextAccount, fetchImpl })
     if (synced) {
       nextAccount = synced
+    }
+    const syncedTodayIncome = await fetchNewApiTodayIncome({
+      account: nextAccount,
+      fetchImpl,
+    }).catch(() => nextAccount.account_info.today_income)
+    nextAccount = {
+      ...nextAccount,
+      account_info: {
+        ...nextAccount.account_info,
+        today_income: syncedTodayIncome,
+      },
     }
     const detailParts: string[] = []
     if (result.status === CheckinResultStatus.Success) {

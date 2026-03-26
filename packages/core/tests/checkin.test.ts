@@ -422,7 +422,37 @@ describe("executeCheckinRun", () => {
                 id: 1,
                 username: "alice",
                 quota: 1_250_000,
-                today_income: 250_000,
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        if (url.includes("/api/log/self") && url.includes("type=4")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                total: 1,
+                items: [
+                  {
+                    quota: 250_000,
+                    content: "签到奖励",
+                  },
+                ],
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        if (url.includes("/api/log/self")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                total: 0,
+                items: [],
               },
             }),
             { status: 200 },
@@ -435,7 +465,7 @@ describe("executeCheckinRun", () => {
 
     expect(record.summary.success).toBe(1)
     expect(record.results[0].message).toContain("0.5")
-    expect(record.results[0].message).toContain("今日收入")
+    expect(record.results[0].message).toContain("今日收入 +0.5 刀")
   })
 
   it("adds today income details to already-checked messages after syncing the latest account state", async () => {
@@ -445,7 +475,7 @@ describe("executeCheckinRun", () => {
         account_info: {
           ...baseAccount.account_info,
           quota: 1_000_000,
-          today_income: 250_000,
+          today_income: 0,
         },
       },
     ])
@@ -476,7 +506,37 @@ describe("executeCheckinRun", () => {
                 id: 1,
                 username: "alice",
                 quota: 1_000_000,
-                today_income: 250_000,
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        if (url.includes("/api/log/self") && url.includes("type=4")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                total: 1,
+                items: [
+                  {
+                    quota: 250_000,
+                    content: "签到奖励",
+                  },
+                ],
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        if (url.includes("/api/log/self")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                total: 0,
+                items: [],
               },
             }),
             { status: 200 },
@@ -489,7 +549,7 @@ describe("executeCheckinRun", () => {
 
     expect(record.summary.alreadyChecked).toBe(1)
     expect(record.results[0].message).toContain("今天已经签到")
-    expect(record.results[0].message).toContain("今日收入")
+    expect(record.results[0].message).toContain("今日收入 +0.5 刀")
   })
 
   it("syncs account_info.id from /api/user/self before check-in when the imported account lacks a user id", async () => {

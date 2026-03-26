@@ -253,7 +253,6 @@ describe("CheckinOrchestrator", () => {
             account_info: {
               ...anyrouterAccount.account_info,
               quota: 1_250_000,
-              today_income: 250_000,
             },
           },
         }
@@ -275,11 +274,45 @@ describe("CheckinOrchestrator", () => {
         },
       },
       refresher,
-      async () =>
-        new Response(
+      async (input) => {
+        const url = String(input)
+
+        if (url.includes("/api/log/self") && url.includes("type=4")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                total: 1,
+                items: [
+                  {
+                    quota: 250_000,
+                    content: "签到奖励",
+                  },
+                ],
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        if (url.includes("/api/log/self")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                total: 0,
+                items: [],
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        return new Response(
           "<html>login required</html>",
           { status: 403 },
-        ),
+        )
+      },
     )
 
     const result = await orchestrator.runCheckinBatch({
@@ -290,7 +323,7 @@ describe("CheckinOrchestrator", () => {
     expect(result.refreshedAccountIds).toEqual([anyrouterAccount.id])
     expect(result.record.summary.success).toBe(1)
     expect(result.record.results[0].message).toContain("0.5")
-    expect(result.record.results[0].message).toContain("今日收入")
+    expect(result.record.results[0].message).toContain("今日收入 +0.5 刀")
   })
 
   it("emits progress messages during refreshSessions", async () => {

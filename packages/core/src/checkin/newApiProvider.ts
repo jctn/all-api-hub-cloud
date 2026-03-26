@@ -16,6 +16,12 @@ import {
   resolveRewardFromData,
 } from "./shared.js"
 
+const QUOTA_PER_USD = 500_000
+const DEFAULT_LOG_PAGE_SIZE = 100
+const MAX_LOG_PAGES = 20
+const LOG_TYPE_TOPUP = 1
+const LOG_TYPE_SYSTEM = 4
+
 function isAlreadyCheckedMessage(message: string): boolean {
   const normalized = message.toLowerCase()
   return ["已经签到", "已签到", "今天已经签到", "already"].some((snippet) =>
@@ -48,6 +54,120 @@ function buildBaseResult(
     siteType: account.site_type,
     startedAt,
   }
+}
+
+function getTodayTimestampRange(): { start: number; end: number } {
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  const end = new Date()
+  end.setHours(23, 59, 59, 999)
+  return {
+    start: Math.floor(start.getTime() / 1000),
+    end: Math.floor(end.getTime() / 1000),
+  }
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function extractQuotaFromLogItem(
+  item: Record<string, unknown>,
+  exchangeRate: number,
+): number {
+  const quota = toFiniteNumber(item.quota)
+  if (quota && quota > 0) {
+    return quota
+  }
+
+  const content = typeof item.content === "string" ? item.content : ""
+  const match = content.match(/([\p{Sc}])\s*([\d,]+(?:\.\d+)?)/u)
+  if (!match) {
+    return 0
+  }
+
+  const currencySymbol = match[1]
+  let amount = Number.parseFloat(match[2].replace(/,/gu, ""))
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return 0
+  }
+
+  if (currencySymbol === "¥") {
+    amount = amount / exchangeRate
+  }
+
+  return Math.round(amount * QUOTA_PER_USD)
+}
+
+export async function fetchNewApiTodayIncome(params: {
+  account: SiteAccount
+  fetchImpl?: typeof fetch
+}): Promise<number> {
+  const fetchImpl = params.fetchImpl ?? fetch
+  const account = params.account
+  const { start, end } = getTodayTimestampRange()
+  let totalIncome = 0
+
+  for (const logType of [LOG_TYPE_TOPUP, LOG_TYPE_SYSTEM]) {
+    let currentPage = 1
+
+    while (currentPage <= MAX_LOG_PAGES) {
+      const query = new URLSearchParams({
+        p: currentPage.toString(),
+        page_size: DEFAULT_LOG_PAGE_SIZE.toString(),
+        type: String(logType),
+        token_name: "",
+        model_name: "",
+        start_timestamp: String(start),
+        end_timestamp: String(end),
+        group: "",
+      })
+
+      const response = await fetchImpl(
+        `${joinUrl(normalizeBaseUrl(account.site_url), "/api/log/self")}?${query.toString()}`,
+        {
+          method: "GET",
+          headers: buildAccountHeaders(account),
+        },
+      )
+      const parsed = await parseJsonResponse(response)
+      const payload =
+        parsed.payload && typeof parsed.payload.data === "object"
+          ? (parsed.payload.data as Record<string, unknown>)
+          : parsed.payload
+
+      if (!payload || !response.ok) {
+        throw new Error(
+          parsed.rawText || `today income log request failed, HTTP ${response.status}`,
+        )
+      }
+
+      const items = Array.isArray(payload.items)
+        ? (payload.items as Array<Record<string, unknown>>)
+        : []
+      totalIncome += items.reduce(
+        (sum, item) => sum + extractQuotaFromLogItem(item, account.exchange_rate),
+        0,
+      )
+
+      const total = toFiniteNumber(payload.total) ?? 0
+      const totalPages = total > 0 ? Math.ceil(total / DEFAULT_LOG_PAGE_SIZE) : 0
+      if (currentPage >= totalPages || totalPages === 0) {
+        break
+      }
+
+      currentPage += 1
+    }
+  }
+
+  return totalIncome
 }
 
 export async function runNewApiCheckin(params: {
