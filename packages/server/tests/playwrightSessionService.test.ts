@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   AuthType,
+  CheckinResultStatus,
   HealthState,
   type SiteAccount,
   type StorageRepository,
@@ -428,6 +429,59 @@ describe("PlaywrightSiteSessionService", () => {
     }).captureAuthenticatedAccount(page, context, baseAccount, baseProfile, {})
 
     expect(result?.account_info.access_token).toBe("nested-token")
+  })
+
+  it("can complete a browser-session check-in even when no access token is extracted", async () => {
+    const progress: string[] = []
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async () => {
+        throw new Error("unexpected node fetch call")
+      },
+    )
+
+    const page = {
+      url() {
+        return "https://demo.example.com/console"
+      },
+      async evaluate(_fn: unknown, arg?: unknown) {
+        if (Array.isArray(arg)) {
+          return ""
+        }
+
+        return {
+          statusCode: 200,
+          rawText: JSON.stringify({
+            success: true,
+            message: "签到成功",
+          }),
+        }
+      },
+      async goto() {
+        return undefined
+      },
+    }
+
+    const result = await (service as unknown as {
+      performBrowserSessionCheckin: (
+        page: typeof page,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<{
+        status: CheckinResultStatus
+        message: string
+      }>
+    }).performBrowserSessionCheckin(page, baseAccount, baseProfile, {
+      onProgress(message) {
+        progress.push(message)
+      },
+    })
+
+    expect(result.status).toBe(CheckinResultStatus.Success)
+    expect(result.message).toContain("已通过浏览器会话补签")
+    expect(progress).toContain("使用浏览器上下文调用 /api/user/checkin")
   })
 
   it("reports storage diagnostics when login succeeds but token extraction still fails", async () => {

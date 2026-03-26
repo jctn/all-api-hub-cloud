@@ -221,6 +221,82 @@ describe("CheckinOrchestrator", () => {
     expect(requests).toContain("Bearer fresh-token")
   })
 
+  it("falls back to browser-session check-in when refresh finds a logged-in cookie session but no token", async () => {
+    const cookieOnlyAccount: SiteAccount = {
+      ...baseAccount,
+      account_info: {
+        ...baseAccount.account_info,
+        access_token: "",
+      },
+      authType: AuthType.Cookie,
+      cookieAuth: {
+        sessionCookie: "sid=stale-cookie",
+      },
+    }
+    const repository = await createRepositoryWithAccounts([cookieOnlyAccount])
+
+    const refresher = {
+      async refreshSiteSession(): Promise<SessionRefreshResult> {
+        return {
+          status: "failed",
+          message: "登录成功但未提取到 access token",
+        }
+      },
+      async checkInWithBrowserSession(): Promise<CheckinAccountResult> {
+        const now = Date.now()
+        return {
+          accountId: cookieOnlyAccount.id,
+          siteName: cookieOnlyAccount.site_name,
+          siteUrl: cookieOnlyAccount.site_url,
+          siteType: cookieOnlyAccount.site_type,
+          status: CheckinResultStatus.Success,
+          message: "签到成功；已通过浏览器会话补签",
+          startedAt: now,
+          completedAt: now,
+        }
+      },
+    } satisfies SiteSessionRefresher & {
+      checkInWithBrowserSession: (
+        account: SiteAccount,
+      ) => Promise<CheckinAccountResult>
+    }
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {
+          "demo.example.com": {
+            hostname: "demo.example.com",
+            loginPath: "/login",
+            loginButtonSelectors: ["button.login"],
+            successUrlPatterns: ["/console"],
+            tokenStorageKeys: ["access_token"],
+            postLoginSelectors: [".avatar"],
+          },
+        },
+      },
+      refresher,
+      async (_input) =>
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: "无权进行此操作",
+          }),
+          { status: 401 },
+        ),
+    )
+
+    const result = await orchestrator.runCheckinBatch({
+      accountId: cookieOnlyAccount.id,
+      mode: "manual",
+    })
+
+    expect(result.refreshedAccountIds).toEqual([])
+    expect(result.record.summary.success).toBe(1)
+    expect(result.record.results[0].status).toBe(CheckinResultStatus.Success)
+    expect(result.record.results[0].message).toContain("浏览器会话补签")
+  })
+
   it("includes reward delta when anyrouter login refresh counts as a successful check-in", async () => {
     const anyrouterAccount: SiteAccount = {
       ...baseAccount,

@@ -3,11 +3,18 @@ import path from "node:path"
 
 import {
   AuthType,
+  buildCompatUserIdHeaders,
   buildCookieHeader,
+  CheckinResultStatus,
+  describeError,
   fetchNewApiSelf,
   isAnyrouterSiteType,
   joinUrl,
   normalizeBaseUrl,
+  resolveCheckInPath,
+  resolvePayloadMessage,
+  resolveRewardFromData,
+  type CheckinAccountResult,
   type SiteAccount,
   type StorageRepository,
 } from "@all-api-hub/core"
@@ -97,6 +104,10 @@ export interface SiteSessionRefresher {
     account: SiteAccount,
     options?: SessionRefreshOptions,
   ): Promise<SessionRefreshResult>
+  checkInWithBrowserSession?(
+    account: SiteAccount,
+    options?: SessionRefreshOptions,
+  ): Promise<CheckinAccountResult | null>
 }
 
 export class PlaywrightSiteSessionService implements SiteSessionRefresher {
@@ -223,6 +234,103 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         status: "failed",
         message: error instanceof Error ? error.message : String(error),
         diagnosticPath,
+      }
+    } finally {
+      await context?.close()
+    }
+  }
+
+  async checkInWithBrowserSession(
+    account: SiteAccount,
+    options: SessionRefreshOptions = {},
+  ): Promise<CheckinAccountResult | null> {
+    const profile = matchOrDefaultSiteLoginProfile(
+      account.site_url,
+      this.config.siteLoginProfiles,
+      account.site_type,
+    )
+    if (!profile) {
+      return null
+    }
+
+    await this.reportProgress(options, "尝试使用浏览器会话执行签到补救")
+    await fs.mkdir(this.config.sharedSsoProfileDirectory, { recursive: true })
+    await fs.mkdir(this.config.diagnosticsDirectory, { recursive: true })
+    await this.cleanupStaleProfileLocks(this.config.sharedSsoProfileDirectory)
+
+    let context: BrowserContext | null = null
+    let page: Page | null = null
+
+    try {
+      context = await chromium.launchPersistentContext(
+        this.config.sharedSsoProfileDirectory,
+        {
+          executablePath: this.config.chromiumExecutablePath,
+          headless: true,
+          args: ["--no-sandbox", "--disable-dev-shm-usage"],
+          viewport: { width: 1400, height: 960 },
+        },
+      )
+      page = context.pages()[0] ?? (await context.newPage())
+
+      await page.goto(joinUrl(account.site_url, profile.loginPath), {
+        waitUntil: "domcontentloaded",
+        timeout: 90_000,
+      })
+
+      const flowResult = await this.completeLoginFlow(
+        context,
+        page,
+        account,
+        profile,
+        options,
+      )
+      if (flowResult.status !== "ready") {
+        const now = Date.now()
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status:
+            flowResult.status === "manual_action_required"
+              ? CheckinResultStatus.ManualActionRequired
+              : CheckinResultStatus.Failed,
+          code: flowResult.status,
+          message: flowResult.message,
+          startedAt: now,
+          completedAt: now,
+          checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
+        }
+      }
+
+      return await this.performBrowserSessionCheckin(
+        flowResult.page,
+        account,
+        profile,
+        options,
+      )
+    } catch (error) {
+      const now = Date.now()
+      const message = describeError(error)
+      if (page) {
+        const diagnosticPath = await this.captureDiagnostic(page, account)
+        if (diagnosticPath) {
+          await this.reportProgress(options, `已保存诊断截图：${diagnosticPath}`)
+        }
+      }
+      return {
+        accountId: account.id,
+        siteName: account.site_name,
+        siteUrl: account.site_url,
+        siteType: account.site_type,
+        status: CheckinResultStatus.Failed,
+        code: "browser_session_checkin_failed",
+        message: message || "浏览器会话补签失败",
+        rawMessage: message || undefined,
+        startedAt: now,
+        completedAt: now,
+        checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
       }
     } finally {
       await context?.close()
@@ -546,6 +654,199 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     return null
+  }
+
+  private async performBrowserSessionCheckin(
+    page: Page,
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
+  ): Promise<CheckinAccountResult> {
+    const startedAt = Date.now()
+    const targetBaseUrl = normalizeBaseUrl(account.site_url)
+    const currentUrl = page.url()
+    const currentPath = this.getUrlPathname(currentUrl)
+    if (
+      this.getUrlHostname(currentUrl) !== new URL(targetBaseUrl).hostname ||
+      currentPath.includes("/login") ||
+      currentPath.includes("/auth")
+    ) {
+      await this.reportProgress(options, `返回目标站点主页：${targetBaseUrl}`)
+      await page.goto(targetBaseUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 60_000,
+      })
+    }
+
+    const accessToken = await this.extractAccessToken(page, profile)
+    const apiUrl = joinUrl(targetBaseUrl, "/api/user/checkin")
+    const checkInUrl = joinUrl(account.site_url, resolveCheckInPath(account.site_type))
+    const headers = {
+      "Content-Type": "application/json",
+      Pragma: "no-cache",
+      "X-Requested-With": "XMLHttpRequest",
+      ...buildCompatUserIdHeaders(account.account_info.id),
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    }
+
+    await this.reportProgress(options, "使用浏览器上下文调用 /api/user/checkin")
+
+    try {
+      const browserResponse = await page.evaluate(
+        async ({ requestUrl, requestHeaders }) => {
+          const response = await fetch(requestUrl, {
+            method: "POST",
+            headers: requestHeaders,
+            body: "{}",
+            credentials: "include",
+          })
+          return {
+            statusCode: response.status,
+            rawText: await response.text(),
+          }
+        },
+        {
+          requestUrl: apiUrl,
+          requestHeaders: headers,
+        },
+      )
+
+      const payload = this.tryParseJsonRecord(browserResponse.rawText)
+      const message = resolvePayloadMessage(payload, browserResponse.rawText)
+      const isSuccess = payload?.success === true
+
+      if (isSuccess) {
+        const reward = resolveRewardFromData(payload?.data)
+        const fullMessage =
+          reward && !message.includes(reward)
+            ? `${message || "签到成功"}，${reward}；已通过浏览器会话补签`
+            : `${message || "签到成功"}；已通过浏览器会话补签`
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.Success,
+          message: fullMessage,
+          rawMessage: message || undefined,
+          startedAt,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      if (this.isAlreadyCheckedMessage(message)) {
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.AlreadyChecked,
+          message: `${message || "今天已经签到"}；已通过浏览器会话校验`,
+          rawMessage: message || undefined,
+          startedAt,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      if (
+        this.isManualActionRequiredMessage(message) ||
+        browserResponse.rawText.toLowerCase().includes("cloudflare")
+      ) {
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.ManualActionRequired,
+          code: "turnstile_required",
+          message: message || "需要人工完成验证后重试",
+          rawMessage: message || browserResponse.rawText || undefined,
+          startedAt,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      if (
+        browserResponse.statusCode === 401 ||
+        browserResponse.statusCode === 403
+      ) {
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.Failed,
+          code: "auth_invalid",
+          message: message || "认证失效，请重新登录",
+          rawMessage: message || browserResponse.rawText || undefined,
+          startedAt,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      return {
+        accountId: account.id,
+        siteName: account.site_name,
+        siteUrl: account.site_url,
+        siteType: account.site_type,
+        status: CheckinResultStatus.Failed,
+        code: "checkin_failed",
+        message: message || `签到失败，HTTP ${browserResponse.statusCode}`,
+        rawMessage: message || browserResponse.rawText || undefined,
+        startedAt,
+        completedAt: Date.now(),
+        checkInUrl,
+      }
+    } catch (error) {
+      const message = describeError(error)
+      return {
+        accountId: account.id,
+        siteName: account.site_name,
+        siteUrl: account.site_url,
+        siteType: account.site_type,
+        status: CheckinResultStatus.Failed,
+        code: "network_error",
+        message: message || "浏览器会话请求失败",
+        rawMessage: message || undefined,
+        startedAt,
+        completedAt: Date.now(),
+        checkInUrl,
+      }
+    }
+  }
+
+  private tryParseJsonRecord(rawText: string): Record<string, unknown> | null {
+    if (!rawText.trim()) {
+      return null
+    }
+
+    try {
+      return JSON.parse(rawText) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+
+  private isAlreadyCheckedMessage(message: string): boolean {
+    const normalized = message.toLowerCase()
+    return ["已经签到", "已签到", "今天已经签到", "already"].some((snippet) =>
+      normalized.includes(snippet.toLowerCase()),
+    )
+  }
+
+  private isManualActionRequiredMessage(message: string): boolean {
+    const normalized = message.toLowerCase()
+    return (
+      normalized.includes("turnstile") ||
+      normalized.includes("cloudflare") ||
+      normalized.includes("captcha") ||
+      normalized.includes("校验") ||
+      normalized.includes("验证")
+    )
   }
 
   private async detectManualChallenge(page: Page): Promise<string | null> {
