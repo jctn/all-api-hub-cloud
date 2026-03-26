@@ -221,6 +221,77 @@ describe("CheckinOrchestrator", () => {
     expect(requests).toContain("Bearer fresh-token")
   })
 
+  it("includes reward delta when anyrouter login refresh counts as a successful check-in", async () => {
+    const anyrouterAccount: SiteAccount = {
+      ...baseAccount,
+      site_name: "AnyRouter",
+      site_url: "https://anyrouter.example.com",
+      site_type: "anyrouter",
+      authType: AuthType.Cookie,
+      account_info: {
+        ...baseAccount.account_info,
+        access_token: "",
+        quota: 1_000_000,
+        today_income: 0,
+      },
+      cookieAuth: {
+        sessionCookie: "sid=expired",
+      },
+    }
+    const repository = await createRepositoryWithAccounts([anyrouterAccount])
+
+    const refresher: SiteSessionRefresher = {
+      async refreshSiteSession(): Promise<SessionRefreshResult> {
+        return {
+          status: "refreshed",
+          message: "ok",
+          account: {
+            ...anyrouterAccount,
+            cookieAuth: {
+              sessionCookie: "sid=fresh",
+            },
+            account_info: {
+              ...anyrouterAccount.account_info,
+              quota: 1_250_000,
+              today_income: 250_000,
+            },
+          },
+        }
+      },
+    }
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {
+          "anyrouter.example.com": {
+            hostname: "anyrouter.example.com",
+            loginPath: "/login",
+            loginButtonSelectors: ["button.login"],
+            successUrlPatterns: ["/console"],
+            tokenStorageKeys: ["access_token"],
+            postLoginSelectors: [".avatar"],
+          },
+        },
+      },
+      refresher,
+      async () =>
+        new Response(
+          "<html>login required</html>",
+          { status: 403 },
+        ),
+    )
+
+    const result = await orchestrator.runCheckinBatch({
+      accountId: anyrouterAccount.id,
+      mode: "manual",
+    })
+
+    expect(result.refreshedAccountIds).toEqual([anyrouterAccount.id])
+    expect(result.record.summary.success).toBe(1)
+    expect(result.record.results[0].message).toContain("0.5")
+  })
+
   it("emits progress messages during refreshSessions", async () => {
     const repository = await createRepositoryWithAccounts([baseAccount])
     const progress: string[] = []

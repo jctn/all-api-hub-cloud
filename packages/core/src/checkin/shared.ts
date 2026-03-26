@@ -6,6 +6,8 @@ import {
 } from "../utils/auth.js"
 import { buildCompatUserIdHeaders } from "../utils/compatHeaders.js"
 
+const QUOTA_PER_USD = 500_000
+
 export function normalizeMessage(message: unknown): string {
   return typeof message === "string" ? message : ""
 }
@@ -138,6 +140,32 @@ export function resolveRewardFromData(data: unknown): string {
         }
       }
     }
+  }
+
+  return ""
+}
+
+function formatQuotaDeltaAsReward(deltaQuota: number): string {
+  const deltaUsd = deltaQuota / QUOTA_PER_USD
+  const precision = deltaUsd >= 1 ? 2 : deltaUsd >= 0.1 ? 3 : 4
+  const normalized = Number(deltaUsd.toFixed(precision)).toString()
+  return `获得 ${normalized} 刀`
+}
+
+export function resolveRewardFromAccountDiff(
+  before: SiteAccount,
+  after: SiteAccount,
+): string {
+  const incomeDelta =
+    (after.account_info.today_income || 0) - (before.account_info.today_income || 0)
+  if (incomeDelta > 0) {
+    return formatQuotaDeltaAsReward(incomeDelta)
+  }
+
+  const quotaDelta =
+    (after.account_info.quota || 0) - (before.account_info.quota || 0)
+  if (quotaDelta > 0) {
+    return formatQuotaDeltaAsReward(quotaDelta)
   }
 
   return ""

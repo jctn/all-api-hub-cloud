@@ -153,6 +153,18 @@ export async function fetchNewApiSelf(params: {
 }): Promise<SiteAccount | null> {
   const fetchImpl = params.fetchImpl ?? fetch
   const account = params.account
+  const toNumberOrFallback = (value: unknown, fallback: number): number => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed)) {
+        return parsed
+      }
+    }
+    return fallback
+  }
 
   try {
     const response = await fetchImpl(
@@ -191,14 +203,27 @@ export async function fetchNewApiSelf(params: {
             ? payloadData.access_token
             : account.account_info.access_token,
         quota:
-          typeof payloadData.quota === "number"
-            ? payloadData.quota
-            : account.account_info.quota,
-        today_prompt_tokens: account.account_info.today_prompt_tokens,
-        today_completion_tokens: account.account_info.today_completion_tokens,
-        today_quota_consumption: account.account_info.today_quota_consumption,
-        today_requests_count: account.account_info.today_requests_count,
-        today_income: account.account_info.today_income,
+          toNumberOrFallback(payloadData.quota, account.account_info.quota),
+        today_prompt_tokens: toNumberOrFallback(
+          payloadData.today_prompt_tokens,
+          account.account_info.today_prompt_tokens,
+        ),
+        today_completion_tokens: toNumberOrFallback(
+          payloadData.today_completion_tokens,
+          account.account_info.today_completion_tokens,
+        ),
+        today_quota_consumption: toNumberOrFallback(
+          payloadData.today_quota_consumption,
+          account.account_info.today_quota_consumption,
+        ),
+        today_requests_count: toNumberOrFallback(
+          payloadData.today_requests_count,
+          account.account_info.today_requests_count,
+        ),
+        today_income: toNumberOrFallback(
+          payloadData.today_income,
+          account.account_info.today_income,
+        ),
       },
     }
   } catch {

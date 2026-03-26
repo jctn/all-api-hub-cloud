@@ -5,6 +5,7 @@ import {
   executeCheckinAccount,
   hasUsableAuth,
   isAnyrouterSiteType,
+  resolveRewardFromAccountDiff,
   isSupportedCheckinSiteType,
   summarizeCheckinResults,
   type CheckinAccountResult,
@@ -126,13 +127,20 @@ export class CheckinOrchestrator {
           refreshedAccountIds.push(account.id)
 
           if (isAnyrouterSiteType(account.site_type)) {
+            const refreshedAccount =
+              refreshResult.account ??
+              (await this.repository.getAccountById(account.id)) ??
+              account
+            const rewardFromDiff = resolveRewardFromAccountDiff(account, refreshedAccount)
             result = {
               accountId: account.id,
               siteName: account.site_name,
               siteUrl: account.site_url,
               siteType: account.site_type,
               status: CheckinResultStatus.Success,
-              message: "登录成功即签到（AnyRouter）",
+              message: rewardFromDiff
+                ? `登录成功即签到（AnyRouter），${rewardFromDiff}`
+                : "登录成功即签到（AnyRouter）",
               startedAt: result.startedAt,
               completedAt: Date.now(),
             }

@@ -384,6 +384,59 @@ describe("executeCheckinRun", () => {
     expect(record.summary.success).toBe(1)
   })
 
+  it("adds quota delta details to success messages after syncing the latest account state", async () => {
+    const repository = await createRepositoryWithAccounts([
+      {
+        ...baseAccount,
+        account_info: {
+          ...baseAccount.account_info,
+          quota: 1_000_000,
+          today_income: 0,
+        },
+      },
+    ])
+
+    const record = await executeCheckinRun({
+      repository,
+      initiatedBy: "server",
+      mode: "manual",
+      targetAccountId: baseAccount.id,
+      fetchImpl: async (input) => {
+        const url = String(input)
+
+        if (url.endsWith("/api/user/checkin")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              message: "签到成功",
+            }),
+            { status: 200 },
+          )
+        }
+
+        if (url.endsWith("/api/user/self")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                id: 1,
+                username: "alice",
+                quota: 1_250_000,
+                today_income: 250_000,
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        throw new Error(`Unexpected URL: ${url}`)
+      },
+    })
+
+    expect(record.summary.success).toBe(1)
+    expect(record.results[0].message).toContain("0.5")
+  })
+
   it("syncs account_info.id from /api/user/self before check-in when the imported account lacks a user id", async () => {
     const repository = await createRepositoryWithAccounts([
       {
