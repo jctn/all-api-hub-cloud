@@ -58,6 +58,23 @@ const GITHUB_AUTHORIZE_SELECTORS = [
 const AUTH_SELF_VALIDATION_ATTEMPTS = 5
 const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
 
+type TokenStorageKind = "localStorage" | "sessionStorage"
+
+interface TokenStorageDiagnosticEntry {
+  storage: TokenStorageKind
+  key: string
+  status: string
+}
+
+interface AccessTokenDiagnostics {
+  currentUrl: string
+  localStorageKeys: string[]
+  sessionStorageKeys: string[]
+  configuredKeyEntries: TokenStorageDiagnosticEntry[]
+  tokenLikeEntries: TokenStorageDiagnosticEntry[]
+  globalHints: string[]
+}
+
 export type SessionRefreshStatus =
   | "refreshed"
   | "manual_action_required"
@@ -420,6 +437,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       context,
       account,
       profile,
+      options,
     )
 
     if (!synced?.account) {
@@ -484,6 +502,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     context: BrowserContext,
     account: SiteAccount,
     profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
   ): Promise<{ account: SiteAccount; snapshot: SiteAccount } | null> {
     let lastCookieOnlySession: { account: SiteAccount; snapshot: SiteAccount } | null = null
 
@@ -522,6 +541,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     if (lastCookieOnlySession) {
+      await this.reportAccessTokenDiagnostics(page, profile, options)
       throw new Error("登录成功但未提取到 access token")
     }
 
@@ -780,6 +800,215 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         return ""
       }, profile.tokenStorageKeys)
       .catch(() => "")
+  }
+
+  private async reportAccessTokenDiagnostics(
+    page: Page,
+    profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
+  ): Promise<void> {
+    try {
+      const diagnostics = await this.collectAccessTokenDiagnostics(page, profile)
+      await this.reportProgress(
+        options,
+        `access token 提取诊断：currentUrl=${diagnostics.currentUrl || "<unknown>"}`,
+      )
+      await this.reportProgress(
+        options,
+        `access token 提取诊断：localStorage keys=${this.formatDiagnosticList(
+          diagnostics.localStorageKeys,
+        )}`,
+      )
+      await this.reportProgress(
+        options,
+        `access token 提取诊断：sessionStorage keys=${this.formatDiagnosticList(
+          diagnostics.sessionStorageKeys,
+        )}`,
+      )
+      await this.reportProgress(
+        options,
+        `access token 提取诊断：configured keys=${this.formatDiagnosticEntries(
+          diagnostics.configuredKeyEntries,
+        )}`,
+      )
+      await this.reportProgress(
+        options,
+        `access token 提取诊断：token-like entries=${this.formatDiagnosticEntries(
+          diagnostics.tokenLikeEntries,
+        )}`,
+      )
+      await this.reportProgress(
+        options,
+        `access token 提取诊断：globals=${this.formatDiagnosticList(
+          diagnostics.globalHints,
+        )}`,
+      )
+    } catch (error) {
+      await this.reportProgress(
+        options,
+        `access token 提取诊断失败：${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  private async collectAccessTokenDiagnostics(
+    page: Page,
+    profile: SiteLoginProfile,
+  ): Promise<AccessTokenDiagnostics> {
+    return await page.evaluate(
+      ({ tokenStorageKeys }) => {
+        type TokenStorageKind = "localStorage" | "sessionStorage"
+
+        interface TokenStorageDiagnosticEntry {
+          storage: TokenStorageKind
+          key: string
+          status: string
+        }
+
+        const summarizeValue = (rawValue: string): string => {
+          const trimmed = rawValue.trim()
+          if (!trimmed) {
+            return "empty-string"
+          }
+
+          if (!/^[\[{\"]/.test(trimmed)) {
+            return trimmed.length >= 12 ? "raw-string-token-like" : "raw-string-short"
+          }
+
+          try {
+            const parsed = JSON.parse(trimmed) as unknown
+            if (typeof parsed === "string") {
+              return parsed.trim().length >= 12
+                ? "json-string-token-like"
+                : "json-string-short"
+            }
+
+            if (parsed && typeof parsed === "object") {
+              const record = parsed as Record<string, unknown>
+              if (
+                typeof record.access_token === "string" &&
+                record.access_token.trim().length > 0
+              ) {
+                return "json-access_token"
+              }
+
+              const tokenLikeKeys = Object.entries(record)
+                .filter(
+                  ([entryKey, entryValue]) =>
+                    /access[_-]?token|token|jwt|auth/i.test(entryKey) &&
+                    typeof entryValue === "string" &&
+                    entryValue.trim().length > 0,
+                )
+                .map(([entryKey]) => entryKey)
+
+              if (tokenLikeKeys.length > 0) {
+                return `json-token-fields(${tokenLikeKeys.slice(0, 3).join(", ")})`
+              }
+
+              const sampleKeys = Object.keys(record).slice(0, 4)
+              return sampleKeys.length > 0
+                ? `json-object(${sampleKeys.join(", ")})`
+                : "json-object(empty)"
+            }
+
+            return `json-${typeof parsed}`
+          } catch {
+            return "json-invalid"
+          }
+        }
+
+        const readStorageKeys = (storage: Storage): string[] => {
+          const keys: string[] = []
+          for (let index = 0; index < storage.length; index += 1) {
+            const key = storage.key(index)
+            if (key) {
+              keys.push(key)
+            }
+          }
+          return keys
+        }
+
+        const collectEntries = (
+          storage: Storage,
+          storageName: TokenStorageKind,
+          keys: string[],
+        ): TokenStorageDiagnosticEntry[] =>
+          keys.map((key) => {
+            const rawValue = storage.getItem(key)
+            return {
+              storage: storageName,
+              key,
+              status: rawValue ? summarizeValue(rawValue) : "missing",
+            }
+          })
+
+        const localStorageKeys = readStorageKeys(window.localStorage)
+        const sessionStorageKeys = readStorageKeys(window.sessionStorage)
+        const configuredKeyEntries = [
+          ...collectEntries(window.localStorage, "localStorage", tokenStorageKeys),
+          ...collectEntries(window.sessionStorage, "sessionStorage", tokenStorageKeys),
+        ]
+
+        const tokenPattern = /access[_-]?token|token|jwt|auth/i
+        const tokenLikeEntries: TokenStorageDiagnosticEntry[] = []
+        const collectTokenLikeEntries = (
+          storage: Storage,
+          storageName: TokenStorageKind,
+          keys: string[],
+        ) => {
+          for (const key of keys) {
+            if (!tokenPattern.test(key)) {
+              continue
+            }
+
+            const rawValue = storage.getItem(key)
+            if (!rawValue) {
+              continue
+            }
+
+            tokenLikeEntries.push({
+              storage: storageName,
+              key,
+              status: summarizeValue(rawValue),
+            })
+          }
+        }
+
+        collectTokenLikeEntries(window.localStorage, "localStorage", localStorageKeys)
+        collectTokenLikeEntries(window.sessionStorage, "sessionStorage", sessionStorageKeys)
+
+        const globalHints = [
+          "__NUXT__",
+          "__NEXT_DATA__",
+          "__INITIAL_STATE__",
+          "__APOLLO_STATE__",
+        ].filter((key) => key in window)
+
+        return {
+          currentUrl: window.location.href,
+          localStorageKeys,
+          sessionStorageKeys,
+          configuredKeyEntries,
+          tokenLikeEntries,
+          globalHints,
+        }
+      },
+      { tokenStorageKeys: profile.tokenStorageKeys },
+    )
+  }
+
+  private formatDiagnosticList(values?: string[] | null): string {
+    return values && values.length > 0 ? values.join(", ") : "<none>"
+  }
+
+  private formatDiagnosticEntries(
+    entries?: TokenStorageDiagnosticEntry[] | null,
+  ): string {
+    return entries && entries.length > 0
+      ? entries
+          .map((entry) => `${entry.storage}:${entry.key}=${entry.status}`)
+          .join("; ")
+      : "<none>"
   }
 
   private async clickFirstVisible(

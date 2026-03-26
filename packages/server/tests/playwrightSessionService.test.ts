@@ -307,4 +307,74 @@ describe("PlaywrightSiteSessionService", () => {
     expect(result?.account_info.access_token).toBe("fresh-token")
     expect(waits).toEqual([1000, 1000])
   })
+
+  it("reports storage diagnostics when login succeeds but token extraction still fails", async () => {
+    const progress: string[] = []
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async (input) => {
+        if (typeof input === "string" && input.endsWith("/api/user/self")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                id: 1,
+                username: "alice",
+                quota: 42,
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        throw new Error(`unexpected fetch input: ${String(input)}`)
+      },
+    )
+
+    const context = {
+      async cookies() {
+        return [{ name: "sid", value: "cookie-auth" }]
+      },
+    }
+    const page = {
+      url() {
+        return "https://demo.example.com/console"
+      },
+      async evaluate(_fn: unknown, arg?: unknown) {
+        if (Array.isArray(arg)) {
+          return ""
+        }
+
+        return {
+          currentUrl: "https://demo.example.com/console",
+          localStorageKeys: ["persist:root", "auth-store"],
+          sessionStorageKeys: ["sid"],
+          globalHints: ["__NUXT__"],
+        }
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    await expect(
+      (service as unknown as {
+        captureAuthenticatedAccount: (
+          page: typeof page,
+          context: typeof context,
+          account: SiteAccount,
+          profile: SiteLoginProfile,
+          options: { onProgress?: (message: string) => void | Promise<void> },
+        ) => Promise<SiteAccount | null>
+      }).captureAuthenticatedAccount(page, context, baseAccount, baseProfile, {
+        onProgress(message) {
+          progress.push(message)
+        },
+      }),
+    ).rejects.toThrow("登录成功但未提取到 access token")
+
+    expect(progress.some((item) => item.includes("localStorage keys=persist:root, auth-store"))).toBe(true)
+    expect(progress.some((item) => item.includes("globals=__NUXT__"))).toBe(true)
+  })
 })
