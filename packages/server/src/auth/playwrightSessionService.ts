@@ -664,6 +664,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   ): Promise<CheckinAccountResult> {
     const startedAt = Date.now()
     const targetBaseUrl = normalizeBaseUrl(account.site_url)
+    const checkInUrl = joinUrl(account.site_url, resolveCheckInPath(account.site_type))
+    const apiUrl = joinUrl(targetBaseUrl, "/api/user/checkin")
     const currentUrl = page.url()
     const currentPath = this.getUrlPathname(currentUrl)
     if (
@@ -677,39 +679,56 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         timeout: 60_000,
       })
     }
-
-    const accessToken = await this.extractAccessToken(page, profile)
-    const apiUrl = joinUrl(targetBaseUrl, "/api/user/checkin")
-    const checkInUrl = joinUrl(account.site_url, resolveCheckInPath(account.site_type))
-    const headers = {
-      "Content-Type": "application/json",
-      Pragma: "no-cache",
-      "X-Requested-With": "XMLHttpRequest",
-      ...buildCompatUserIdHeaders(account.account_info.id),
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    if (page.url() !== checkInUrl) {
+      await this.reportProgress(options, `打开签到页：${checkInUrl}`)
+      await page.goto(checkInUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 60_000,
+      })
     }
 
-    await this.reportProgress(options, "使用浏览器上下文调用 /api/user/checkin")
+    await this.reportProgress(options, "使用浏览器上下文点击签到按钮")
 
     try {
-      const browserResponse = await page.evaluate(
-        async ({ requestUrl, requestHeaders }) => {
-          const response = await fetch(requestUrl, {
-            method: "POST",
-            headers: requestHeaders,
-            body: "{}",
-            credentials: "include",
-          })
-          return {
-            statusCode: response.status,
-            rawText: await response.text(),
-          }
-        },
-        {
-          requestUrl: apiUrl,
-          requestHeaders: headers,
-        },
-      )
+      const routePattern = "**/api/user/checkin*"
+      await page.route(routePattern, async (route, request) => {
+        await route.continue({
+          headers: this.buildBrowserSessionCheckinHeaders(request.headers()),
+        })
+      })
+
+      let browserResponse: { statusCode: number; rawText: string } | null = null
+      try {
+        const responsePromise = page.waitForResponse(
+          (response) =>
+            response.url().startsWith(apiUrl) &&
+            response.request().method().toUpperCase() === "POST",
+          { timeout: 15_000 },
+        )
+
+        const clicked = await this.clickFirstVisible(page, [
+          "button:has-text('Check in now')",
+          "button:has-text('check in now')",
+          "button:has-text('Check In Now')",
+          "button:has-text('立即签到')",
+        ])
+
+        if (!clicked) {
+          throw new Error("未找到签到按钮")
+        }
+
+        const response = await responsePromise
+        browserResponse = {
+          statusCode: response.status(),
+          rawText: await response.text().catch(() => ""),
+        }
+      } finally {
+        await page.unroute(routePattern).catch(() => undefined)
+      }
+
+      if (!browserResponse) {
+        throw new Error("浏览器会话未捕获到签到请求响应")
+      }
 
       const payload = this.tryParseJsonRecord(browserResponse.rawText)
       const message = resolvePayloadMessage(payload, browserResponse.rawText)
@@ -816,6 +835,22 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         completedAt: Date.now(),
         checkInUrl,
       }
+    }
+  }
+
+  private buildBrowserSessionCheckinHeaders(
+    requestHeaders: Record<string, string>,
+  ): Record<string, string> {
+    return {
+      ...requestHeaders,
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+      "sec-ch-ua":
+        "\"Not.A/Brand\";v=\"99\", \"Google Chrome\";v=\"136\", \"Chromium\";v=\"136\"",
+      "sec-ch-ua-platform": "\"Windows\"",
+      "sec-ch-ua-mobile": "?0",
+      "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+      ...buildCompatUserIdHeaders(requestHeaders["new-api-user"] || requestHeaders["New-API-User"]),
     }
   }
 

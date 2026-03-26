@@ -443,23 +443,51 @@ describe("PlaywrightSiteSessionService", () => {
 
     const page = {
       url() {
-        return "https://demo.example.com/console"
+        return "https://demo.example.com/console/personal"
       },
       async evaluate(_fn: unknown, arg?: unknown) {
         if (Array.isArray(arg)) {
           return ""
         }
-
-        return {
-          statusCode: 200,
-          rawText: JSON.stringify({
-            success: true,
-            message: "签到成功",
-          }),
-        }
       },
       async goto() {
         return undefined
+      },
+      async route() {
+        return undefined
+      },
+      async unroute() {
+        return undefined
+      },
+      async waitForResponse() {
+        return {
+          status() {
+            return 200
+          },
+          async text() {
+            return JSON.stringify({
+              success: true,
+              message: "签到成功",
+            })
+          },
+        }
+      },
+      locator(selector: string) {
+        return {
+          first() {
+            return {
+              async count() {
+                return selector.includes("Check in now") ? 1 : 0
+              },
+              async isVisible() {
+                return selector.includes("Check in now")
+              },
+              async click() {
+                return undefined
+              },
+            }
+          },
+        }
       },
     }
 
@@ -481,7 +509,32 @@ describe("PlaywrightSiteSessionService", () => {
 
     expect(result.status).toBe(CheckinResultStatus.Success)
     expect(result.message).toContain("已通过浏览器会话补签")
-    expect(progress).toContain("使用浏览器上下文调用 /api/user/checkin")
+    expect(progress).toContain("使用浏览器上下文点击签到按钮")
+  })
+
+  it("normalizes browser-session check-in headers so they do not expose HeadlessChrome", () => {
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+    )
+
+    const headers = (service as unknown as {
+      buildBrowserSessionCheckinHeaders: (
+        requestHeaders: Record<string, string>,
+      ) => Record<string, string>
+    }).buildBrowserSessionCheckinHeaders({
+      "user-agent":
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.6 Safari/537.36",
+      "sec-ch-ua":
+        "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+      "sec-ch-ua-platform": "\"Linux\"",
+      accept: "application/json, text/plain, */*",
+    })
+
+    expect(headers["user-agent"]).not.toContain("HeadlessChrome")
+    expect(headers["sec-ch-ua"]).not.toContain("HeadlessChrome")
+    expect(headers["sec-ch-ua-platform"]).toBe("\"Windows\"")
+    expect(headers["accept-language"]).toContain("zh-CN")
   })
 
   it("reports storage diagnostics when login succeeds but token extraction still fails", async () => {
