@@ -29,7 +29,7 @@ describe("formatCheckinMessage", () => {
               siteUrl: "https://alpha.example.com",
               siteType: "new-api",
               status: CheckinResultStatus.Success,
-              message: "签到成功，获得 0.5 刀",
+              message: "签到成功，获得 0.5 刀，今日收入 +1 刀",
               startedAt: 1,
               completedAt: 2,
             },
@@ -39,7 +39,7 @@ describe("formatCheckinMessage", () => {
               siteUrl: "https://beta.example.com",
               siteType: "new-api",
               status: CheckinResultStatus.AlreadyChecked,
-              message: "今天已经签到",
+              message: "今天已经签到，今日收入 +1 刀",
               startedAt: 3,
               completedAt: 4,
             },
@@ -60,8 +60,8 @@ describe("formatCheckinMessage", () => {
     )
 
     expect(message).toContain("账号明细:")
-    expect(message).toContain("\"Alpha API\"，签到情况：签到成功（获得 0.5 刀）；已自动续期会话")
-    expect(message).toContain("\"Beta API\"，签到情况：已签到")
+    expect(message).toContain("\"Alpha API\"，签到情况：签到成功（获得 0.5 刀；今日收入 +1 刀）；已自动续期会话")
+    expect(message).toContain("\"Beta API\"，签到情况：已签到（今日收入 +1 刀）")
     expect(message).toContain("\"Gamma API\"，签到情况：签到失败；失败原因：认证失效，请重新登录")
   })
 })

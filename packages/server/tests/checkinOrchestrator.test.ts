@@ -290,6 +290,7 @@ describe("CheckinOrchestrator", () => {
     expect(result.refreshedAccountIds).toEqual([anyrouterAccount.id])
     expect(result.record.summary.success).toBe(1)
     expect(result.record.results[0].message).toContain("0.5")
+    expect(result.record.results[0].message).toContain("今日收入")
   })
 
   it("emits progress messages during refreshSessions", async () => {

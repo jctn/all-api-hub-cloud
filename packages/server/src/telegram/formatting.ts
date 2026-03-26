@@ -85,15 +85,22 @@ function formatCheckinEntry(
   refreshedAccountIds: Set<string>,
 ): string {
   switch (entry.status) {
-    case CheckinResultStatus.AlreadyChecked:
-      return "已签到"
+    case CheckinResultStatus.AlreadyChecked: {
+      const todayIncomeDetail = extractTodayIncomeDetail(entry)
+      return todayIncomeDetail ? `已签到（${todayIncomeDetail}）` : "已签到"
+    }
     case CheckinResultStatus.Success: {
       const rewardDetail = extractRewardDetail(entry)
+      const todayIncomeDetail = extractTodayIncomeDetail(entry)
       const refreshDetail = refreshedAccountIds.has(entry.accountId)
         ? "；已自动续期会话"
         : ""
-      return rewardDetail
-        ? `签到成功（${rewardDetail}）${refreshDetail}`
+      const detailParts = [rewardDetail, todayIncomeDetail].filter(
+        (value, index, array): value is string =>
+          typeof value === "string" && value.length > 0 && array.indexOf(value) === index,
+      )
+      return detailParts.length > 0
+        ? `签到成功（${detailParts.join("；")}）${refreshDetail}`
         : `签到成功${refreshDetail}`
     }
     case CheckinResultStatus.Skipped:
@@ -111,17 +118,41 @@ function extractRewardDetail(entry: CheckinAccountResult): string | null {
   )
 
   for (const candidate of candidates) {
+    const todayIncomeDetail = extractTodayIncomeDetail({
+      ...entry,
+      message: candidate,
+      rawMessage: undefined,
+    })
+    const rewardCandidate = todayIncomeDetail
+      ? candidate.replace(todayIncomeDetail, "")
+      : candidate
     for (const pattern of [
       /(获得[^，。；\n]*)/u,
       /(奖励[^，。；\n]*)/u,
       /(赠送[^，。；\n]*)/u,
       /([+\-]?\d+(?:\.\d+)?\s*(?:元|刀|积分|金币|点|额度|余额|USD|usd|￥|¥))/u,
     ]) {
-      const match = candidate.match(pattern)
+      const match = rewardCandidate.match(pattern)
       const reward = match?.[1]?.trim()
       if (reward) {
         return reward
       }
+    }
+  }
+
+  return null
+}
+
+function extractTodayIncomeDetail(entry: CheckinAccountResult): string | null {
+  const candidates = [entry.message, entry.rawMessage].filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  )
+
+  for (const candidate of candidates) {
+    const match = candidate.match(/(今日收入[^，。；\n]*)/u)
+    const detail = match?.[1]?.trim()
+    if (detail) {
+      return detail
     }
   }
 

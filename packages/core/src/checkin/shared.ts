@@ -152,6 +152,14 @@ function formatQuotaDeltaAsReward(deltaQuota: number): string {
   return `获得 ${normalized} 刀`
 }
 
+function formatQuotaAsSignedIncome(quota: number): string {
+  const deltaUsd = quota / QUOTA_PER_USD
+  const precision = deltaUsd >= 1 ? 2 : deltaUsd >= 0.1 ? 3 : 4
+  const normalized = Number(Math.abs(deltaUsd).toFixed(precision)).toString()
+  const sign = deltaUsd >= 0 ? "+" : "-"
+  return `今日收入 ${sign}${normalized} 刀`
+}
+
 export function resolveRewardFromAccountDiff(
   before: SiteAccount,
   after: SiteAccount,
@@ -169,6 +177,10 @@ export function resolveRewardFromAccountDiff(
   }
 
   return ""
+}
+
+export function resolveTodayIncomeDetail(account: SiteAccount): string {
+  return formatQuotaAsSignedIncome(account.account_info.today_income || 0)
 }
 
 export function buildAccountHeaders(

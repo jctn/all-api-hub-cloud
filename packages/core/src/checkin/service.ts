@@ -15,7 +15,7 @@ import {
 import { type StorageRepository } from "../storage/repository.js"
 import { hasUsableAuth } from "../utils/auth.js"
 import { toLocalDayKey } from "../utils/date.js"
-import { resolveRewardFromAccountDiff } from "./shared.js"
+import { resolveRewardFromAccountDiff, resolveTodayIncomeDetail } from "./shared.js"
 import { runAnyrouterCheckin } from "./anyrouterProvider.js"
 import {
   fetchNewApiSelf,
@@ -218,13 +218,21 @@ async function runForAccount(
     if (synced) {
       nextAccount = synced
     }
+    const detailParts: string[] = []
     if (result.status === CheckinResultStatus.Success) {
       const rewardFromDiff = resolveRewardFromAccountDiff(effectiveAccount, nextAccount)
       if (rewardFromDiff && !result.message.includes(rewardFromDiff)) {
-        result = {
-          ...result,
-          message: `${result.message || "签到成功"}，${rewardFromDiff}`,
-        }
+        detailParts.push(rewardFromDiff)
+      }
+    }
+    const todayIncomeDetail = resolveTodayIncomeDetail(nextAccount)
+    if (todayIncomeDetail && !result.message.includes(todayIncomeDetail)) {
+      detailParts.push(todayIncomeDetail)
+    }
+    if (detailParts.length > 0) {
+      result = {
+        ...result,
+        message: `${result.message || "签到成功"}，${detailParts.join("，")}`,
       }
     }
     await repository.saveAccount(nextAccount)
