@@ -36,10 +36,42 @@ describe("deployment notifications", () => {
       text: string
     }
     expect(body.chat_id).toBe("10001")
+    expect(body.text.startsWith("[部署通知]")).toBe(true)
     expect(body.text).toContain("运行中")
     expect(body.text).toContain("0.1.0+abcdef0")
     expect(body.text).toContain("main@abcdef0")
     expect(errorMock).not.toHaveBeenCalled()
+  })
+
+  it("formats build-stage notifications with the deployment prefix", async () => {
+    const { formatBuildStageMessage } = await import("../scripts/zeabur-build-notify.mjs")
+
+    const previousEnv = {
+      ZEABUR_GIT_BRANCH: process.env.ZEABUR_GIT_BRANCH,
+      ZEABUR_GIT_COMMIT_SHA: process.env.ZEABUR_GIT_COMMIT_SHA,
+      ZEABUR_GIT_COMMIT_MESSAGE: process.env.ZEABUR_GIT_COMMIT_MESSAGE,
+      ZEABUR_SERVICE_NAME: process.env.ZEABUR_SERVICE_NAME,
+      TZ: process.env.TZ,
+    }
+
+    process.env.ZEABUR_GIT_BRANCH = "main"
+    process.env.ZEABUR_GIT_COMMIT_SHA = "abcdef0123456789"
+    process.env.ZEABUR_GIT_COMMIT_MESSAGE = "Deploy server"
+    process.env.ZEABUR_SERVICE_NAME = "all-api-hub-server"
+    process.env.TZ = "Asia/Shanghai"
+
+    try {
+      const message = formatBuildStageMessage("build_started")
+      expect(message.startsWith("[部署通知]")).toBe(true)
+      expect(message).toContain("开始构建")
+      expect(message).toContain("main@abcdef0")
+    } finally {
+      process.env.ZEABUR_GIT_BRANCH = previousEnv.ZEABUR_GIT_BRANCH
+      process.env.ZEABUR_GIT_COMMIT_SHA = previousEnv.ZEABUR_GIT_COMMIT_SHA
+      process.env.ZEABUR_GIT_COMMIT_MESSAGE = previousEnv.ZEABUR_GIT_COMMIT_MESSAGE
+      process.env.ZEABUR_SERVICE_NAME = previousEnv.ZEABUR_SERVICE_NAME
+      process.env.TZ = previousEnv.TZ
+    }
   })
 
   it("keeps the build result authoritative even when Telegram notifications fail", async () => {

@@ -22,6 +22,7 @@ const RUNTIME_STAGE_LABELS: Record<RuntimeDeploymentStage, string> = {
   starting: "启动中",
   running: "运行中",
 }
+const DEPLOYMENT_NOTIFICATION_PREFIX = "[部署通知]"
 
 function formatTimestamp(timeZone: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -44,6 +45,7 @@ export function formatRuntimeDeploymentStageMessage(
   options: RuntimeDeploymentNotificationOptions,
 ): string {
   const lines = [
+    DEPLOYMENT_NOTIFICATION_PREFIX,
     `服务: ${resolveServiceName()}`,
     `阶段: ${RUNTIME_STAGE_LABELS[options.stage]}`,
     `版本: ${options.config.deploymentVersion}`,

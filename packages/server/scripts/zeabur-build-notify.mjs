@@ -8,6 +8,7 @@ const BUILD_STAGE_LABELS = {
   build_succeeded: "构建成功",
   build_failed: "构建失败",
 }
+const DEPLOYMENT_NOTIFICATION_PREFIX = "[部署通知]"
 
 function readPackageVersion() {
   try {
@@ -48,9 +49,10 @@ function resolveGitMetadata() {
   }
 }
 
-function formatBuildStageMessage(stage, error) {
+export function formatBuildStageMessage(stage, error) {
   const git = resolveGitMetadata()
   const lines = [
+    DEPLOYMENT_NOTIFICATION_PREFIX,
     `服务: ${process.env.ZEABUR_SERVICE_NAME?.trim() || "all-api-hub-server"}`,
     `阶段: ${BUILD_STAGE_LABELS[stage]}`,
     `版本: ${readPackageVersion()}${git.gitCommitShortSha ? `+${git.gitCommitShortSha}` : ""}`,
