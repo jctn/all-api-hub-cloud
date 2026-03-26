@@ -329,8 +329,41 @@ describe("executeCheckinRun", () => {
       },
     ])
 
-    const fetchMock = async () => {
-      throw new Error("scheduled already-checked accounts should not hit the network")
+    const fetchMock = async (input: string | URL | Request) => {
+      const url = String(input)
+
+      if (url.includes("/api/log/self") && url.includes("type=4")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              total: 1,
+              items: [
+                {
+                  quota: 250_000,
+                  content: "签到奖励",
+                },
+              ],
+            },
+          }),
+          { status: 200 },
+        )
+      }
+
+      if (url.includes("/api/log/self")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              total: 0,
+              items: [],
+            },
+          }),
+          { status: 200 },
+        )
+      }
+
+      throw new Error("scheduled already-checked accounts should not hit check-in endpoints")
     }
 
     const record = await executeCheckinRun({
@@ -343,7 +376,8 @@ describe("executeCheckinRun", () => {
     expect(record.summary.alreadyChecked).toBe(1)
     expect(record.summary.failed).toBe(0)
     expect(record.results[0].status).toBe(CheckinResultStatus.AlreadyChecked)
-    expect(record.results[0].message).toBe("今天已经签到")
+    expect(record.results[0].message).toContain("今天已经签到")
+    expect(record.results[0].message).toContain("今日收入 +0.5 刀")
   })
 
   it("still checks the remote site in manual mode even if local state says today is completed", async () => {

@@ -259,6 +259,29 @@ export async function executeCheckinAccount(
 ): Promise<CheckinAccountResult> {
   const ineligible = evaluateEligibility(options.account, options.mode)
   if (ineligible) {
+    if (
+      options.mode === "scheduled" &&
+      ineligible.status === CheckinResultStatus.AlreadyChecked
+    ) {
+      const todayIncome = await fetchNewApiTodayIncome({
+        account: options.account,
+        fetchImpl: options.fetchImpl,
+      }).catch(() => options.account.account_info.today_income)
+
+      const accountWithIncome = {
+        ...options.account,
+        account_info: {
+          ...options.account.account_info,
+          today_income: todayIncome,
+        },
+      }
+
+      return {
+        ...ineligible,
+        message: `${ineligible.message}，${resolveTodayIncomeDetail(accountWithIncome)}`,
+      }
+    }
+
     return ineligible
   }
 
