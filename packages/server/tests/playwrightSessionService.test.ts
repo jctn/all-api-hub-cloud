@@ -249,4 +249,62 @@ describe("PlaywrightSiteSessionService", () => {
     expect(result?.account_info.access_token).toBe("fresh-token")
     expect(progress).toContain("返回目标站点主页：https://demo.example.com")
   })
+
+  it("waits for an access token even when /api/user/self already succeeds with cookie auth", async () => {
+    const waits: number[] = []
+    let tokenReads = 0
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async (input) => {
+        if (typeof input === "string" && input.endsWith("/api/user/self")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                id: 1,
+                username: "alice",
+                quota: 42,
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        throw new Error(`unexpected fetch input: ${String(input)}`)
+      },
+    )
+
+    const context = {
+      async cookies() {
+        return [{ name: "sid", value: "cookie-auth" }]
+      },
+    }
+    const page = {
+      url() {
+        return baseAccount.site_url
+      },
+      async evaluate() {
+        tokenReads += 1
+        return tokenReads >= 3 ? "fresh-token" : ""
+      },
+      async waitForTimeout(ms: number) {
+        waits.push(ms)
+      },
+    }
+
+    const result = await (service as unknown as {
+      captureAuthenticatedAccount: (
+        page: typeof page,
+        context: typeof context,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<SiteAccount | null>
+    }).captureAuthenticatedAccount(page, context, baseAccount, baseProfile, {})
+
+    expect(result?.account_info.access_token).toBe("fresh-token")
+    expect(waits).toEqual([1000, 1000])
+  })
 })

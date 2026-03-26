@@ -5,6 +5,7 @@ import {
   AuthType,
   buildCookieHeader,
   fetchNewApiSelf,
+  isAnyrouterSiteType,
   joinUrl,
   normalizeBaseUrl,
   type SiteAccount,
@@ -484,6 +485,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     account: SiteAccount,
     profile: SiteLoginProfile,
   ): Promise<{ account: SiteAccount; snapshot: SiteAccount } | null> {
+    let lastCookieOnlySession: { account: SiteAccount; snapshot: SiteAccount } | null = null
+
     for (let attempt = 1; attempt <= AUTH_SELF_VALIDATION_ATTEMPTS; attempt += 1) {
       const snapshot = await this.buildAuthenticatedAccountSnapshot(
         context,
@@ -497,7 +500,17 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       })
 
       if (synced) {
-        return {
+        const token =
+          snapshot.account_info.access_token.trim() ||
+          synced.account_info.access_token.trim()
+        if (token || isAnyrouterSiteType(account.site_type)) {
+          return {
+            account: synced,
+            snapshot,
+          }
+        }
+
+        lastCookieOnlySession = {
           account: synced,
           snapshot,
         }
@@ -506,6 +519,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       if (attempt < AUTH_SELF_VALIDATION_ATTEMPTS) {
         await page.waitForTimeout(AUTH_SELF_VALIDATION_RETRY_DELAY_MS)
       }
+    }
+
+    if (lastCookieOnlySession) {
+      throw new Error("登录成功但未提取到 access token")
     }
 
     return null
