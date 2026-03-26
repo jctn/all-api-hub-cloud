@@ -90,6 +90,21 @@ function isScheduledBatchCandidate(account: SiteAccount): boolean {
   )
 }
 
+function isManualBrowserFallbackCandidate(
+  account: SiteAccount,
+  options: BatchCheckinRunOptions,
+): boolean {
+  if (options.mode !== "manual" || !options.accountId) {
+    return false
+  }
+
+  try {
+    return new URL(account.site_url).hostname.toLowerCase() === "api.ouu.ch"
+  } catch {
+    return false
+  }
+}
+
 export class CheckinOrchestrator {
   constructor(
     private readonly repository: StorageRepository,
@@ -123,6 +138,15 @@ export class CheckinOrchestrator {
       const classification = classifyCheckinResultForReauth(result, hasProfile)
 
       if (classification.retryable) {
+        if (isManualBrowserFallbackCandidate(account, options)) {
+          const browserSessionResult =
+            await this.sessionRefresher.checkInWithBrowserSession?.(account)
+          if (browserSessionResult) {
+            results.push(browserSessionResult)
+            continue
+          }
+        }
+
         const refreshResult = await this.sessionRefresher.refreshSiteSession(account)
 
         if (refreshResult.status === "refreshed") {
