@@ -1,4 +1,4 @@
-import type { StorageRepository } from "@all-api-hub/core"
+import type { SiteAccount, StorageRepository } from "@all-api-hub/core"
 import { Bot } from "grammy"
 import type { UserFromGetMe } from "grammy/types"
 
@@ -14,6 +14,10 @@ import {
   formatStatusMessage,
   formatVersionMessage,
 } from "./formatting.js"
+import {
+  formatAccountReferenceCandidates,
+  resolveAccountReference,
+} from "./accountReference.js"
 import { splitTelegramMessage } from "./messageChunks.js"
 
 export async function createTelegramBot(params: {
@@ -104,6 +108,45 @@ export async function createTelegramBot(params: {
     }
   }
 
+  const handleAccountResolution = async (
+    chatId: number | undefined,
+    rawInput: string,
+    usage: string,
+  ): Promise<
+    | { status: "resolved"; account: SiteAccount }
+    | { status: "handled" }
+  > => {
+    const input = rawInput.trim()
+    if (!input) {
+      await sendText(chatId, usage)
+      return { status: "handled" }
+    }
+
+    const accounts = await params.repository.getAccounts()
+    const resolution = resolveAccountReference(accounts, input)
+    if (resolution.status === "resolved") {
+      return {
+        status: "resolved",
+        account: resolution.account,
+      }
+    }
+
+    if (resolution.status === "ambiguous") {
+      await sendText(
+        chatId,
+        [
+          `匹配到多个同名账号：${resolution.input}`,
+          "请改用 accountId：",
+          formatAccountReferenceCandidates(resolution.candidates),
+        ].join("\n"),
+      )
+      return { status: "handled" }
+    }
+
+    await sendText(chatId, `未找到账号：${resolution.input}\n${usage}`)
+    return { status: "handled" }
+  }
+
   bot.command("help", async (ctx) => {
     const chatId = ctx.chat?.id
     await sendText(
@@ -117,10 +160,10 @@ export async function createTelegramBot(params: {
         "/version — 查看版本与部署信息",
         "/sync_import — 从 GitHub 仓库同步导入账号",
         "/checkin_all — 批量签到全部可签到账号",
-        "/checkin <accountId> — 单账号签到",
-        "/auth_refresh <accountId|all> [-log] — 刷新账号会话（-log 输出详细日志）",
-        "/disable <accountId> — 禁用账号（不再签到和刷新）",
-        "/enable <accountId> — 启用账号",
+        "/checkin <accountId|siteName> — 单账号签到",
+        "/auth_refresh <accountId|siteName|all> [-log] — 刷新账号会话（-log 输出详细日志）",
+        "/disable <accountId|siteName> — 禁用账号（不再签到和刷新）",
+        "/enable <accountId|siteName> — 启用账号",
       ].join("\n"),
     )
   })
@@ -154,19 +197,23 @@ export async function createTelegramBot(params: {
 
   bot.command("checkin", async (ctx) => {
     const chatId = ctx.chat?.id
-    const accountId = ctx.match.trim()
-    if (!accountId) {
-      await sendText(chatId, "用法：/checkin <accountId>")
+    const resolution = await handleAccountResolution(
+      chatId,
+      ctx.match.trim(),
+      "用法：/checkin <accountId|siteName>",
+    )
+    if (resolution.status !== "resolved") {
       return
     }
+    const account = resolution.account
 
     await startTask(
-      `单账号签到任务(${accountId})`,
+      `单账号签到任务(${account.site_name})`,
       "checkin_one",
-      `执行单账号签到: ${accountId}`,
+      `执行单账号签到: ${account.site_name} (${account.id})`,
       () =>
         params.orchestrator.runCheckinBatch({
-          accountId,
+          accountId: account.id,
           mode: "manual",
         }),
       (result) => formatCheckinMessage(result, params.config.timeZone),
@@ -179,7 +226,19 @@ export async function createTelegramBot(params: {
     const input = ctx.match.trim()
     const verbose = input.includes("-log")
     const cleanInput = input.replace(/-log/gi, "").trim()
-    const accountId = !cleanInput || cleanInput.toLowerCase() === "all" ? undefined : cleanInput
+    let accountId: string | undefined
+
+    if (cleanInput && cleanInput.toLowerCase() !== "all") {
+      const resolution = await handleAccountResolution(
+        chatId,
+        cleanInput,
+        "用法：/auth_refresh <accountId|siteName|all> [-log]",
+      )
+      if (resolution.status !== "resolved") {
+        return
+      }
+      accountId = resolution.account.id
+    }
 
     await startTask(
       "会话刷新任务",
@@ -241,32 +300,30 @@ export async function createTelegramBot(params: {
 
   bot.command("disable", async (ctx) => {
     const chatId = ctx.chat?.id
-    const accountId = ctx.match.trim()
-    if (!accountId) {
-      await sendText(chatId, "用法：/disable <accountId>")
+    const resolution = await handleAccountResolution(
+      chatId,
+      ctx.match.trim(),
+      "用法：/disable <accountId|siteName>",
+    )
+    if (resolution.status !== "resolved") {
       return
     }
-    const account = await params.repository.getAccountById(accountId)
-    if (!account) {
-      await sendText(chatId, `未找到账号：${accountId}`)
-      return
-    }
+    const account = resolution.account
     await params.repository.saveAccount({ ...account, disabled: true, updated_at: Date.now() })
     await sendText(chatId, `已禁用：${account.site_name} (${account.id})`)
   })
 
   bot.command("enable", async (ctx) => {
     const chatId = ctx.chat?.id
-    const accountId = ctx.match.trim()
-    if (!accountId) {
-      await sendText(chatId, "用法：/enable <accountId>")
+    const resolution = await handleAccountResolution(
+      chatId,
+      ctx.match.trim(),
+      "用法：/enable <accountId|siteName>",
+    )
+    if (resolution.status !== "resolved") {
       return
     }
-    const account = await params.repository.getAccountById(accountId)
-    if (!account) {
-      await sendText(chatId, `未找到账号：${accountId}`)
-      return
-    }
+    const account = resolution.account
     await params.repository.saveAccount({ ...account, disabled: false, updated_at: Date.now() })
     await sendText(chatId, `已启用：${account.site_name} (${account.id})`)
   })

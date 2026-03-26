@@ -91,8 +91,8 @@ npm run start --workspace @all-api-hub/server
 
 - `/sync_import`
 - `/checkin_all`
-- `/checkin <accountId>`
-- `/auth_refresh <accountId|all>`
+- `/checkin <accountId|siteName>`
+- `/auth_refresh <accountId|siteName|all>`
 - `/accounts`
 - `/status`
 
