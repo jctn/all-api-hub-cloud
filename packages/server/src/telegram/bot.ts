@@ -18,6 +18,7 @@ import {
   formatAccountReferenceCandidates,
   resolveAccountReference,
 } from "./accountReference.js"
+import { runSingleAccountCheckinWithAuthFallback } from "./accountActions.js"
 import { splitTelegramMessage } from "./messageChunks.js"
 
 export async function createTelegramBot(params: {
@@ -211,11 +212,7 @@ export async function createTelegramBot(params: {
       `单账号签到任务(${account.site_name})`,
       "checkin_one",
       `执行单账号签到: ${account.site_name} (${account.id})`,
-      () =>
-        params.orchestrator.runCheckinBatch({
-          accountId: account.id,
-          mode: "manual",
-        }),
+      () => runSingleAccountCheckinWithAuthFallback(account, params.orchestrator),
       (result) => formatCheckinMessage(result, params.config.timeZone),
       (text) => sendText(chatId, text),
     )
