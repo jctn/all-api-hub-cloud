@@ -29,10 +29,46 @@ export async function runSingleAccountCheckinWithAuthFallback(
   const refreshRun = await orchestrator.refreshSessions(account.id)
   const refreshResult = refreshRun.results[0]
   if (refreshResult?.status === "refreshed") {
-    return await orchestrator.runCheckinBatch({
+    const retryRun = await orchestrator.runCheckinBatch({
       accountId: account.id,
       mode: "manual",
     })
+    const retryResult = retryRun.record.results[0]
+    if (retryResult?.status === CheckinResultStatus.Success) {
+      return {
+        ...retryRun,
+        record: {
+          ...retryRun.record,
+          results: retryRun.record.results.map((entry) =>
+            entry.accountId === account.id
+              ? {
+                  ...entry,
+                  message: `${entry.message}；已自动刷新会话后重试成功`,
+                }
+              : entry,
+          ),
+        },
+      }
+    }
+
+    if (retryResult?.message) {
+      return {
+        ...retryRun,
+        record: {
+          ...retryRun.record,
+          results: retryRun.record.results.map((entry) =>
+            entry.accountId === account.id
+              ? {
+                  ...entry,
+                  message: `${entry.message}；已自动刷新会话后重试仍失败`,
+                }
+              : entry,
+          ),
+        },
+      }
+    }
+
+    return retryRun
   }
 
   if (refreshResult?.message) {

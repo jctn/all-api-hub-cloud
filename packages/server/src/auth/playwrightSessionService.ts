@@ -398,7 +398,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     options: SessionRefreshOptions,
   ): Promise<SiteAccount | null> {
     const targetBaseUrl = normalizeBaseUrl(account.site_url)
-    if (this.getUrlHostname(page.url()) !== new URL(targetBaseUrl).hostname) {
+    const currentUrl = page.url()
+    const currentPath = this.getUrlPathname(currentUrl)
+    if (
+      this.getUrlHostname(currentUrl) !== new URL(targetBaseUrl).hostname ||
+      currentPath.includes("/login") ||
+      currentPath.includes("/auth")
+    ) {
       await this.reportProgress(options, `返回目标站点主页：${targetBaseUrl}`)
       await page.goto(targetBaseUrl, {
         waitUntil: "domcontentloaded",

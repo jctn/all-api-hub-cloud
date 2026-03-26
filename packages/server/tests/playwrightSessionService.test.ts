@@ -176,4 +176,77 @@ describe("PlaywrightSiteSessionService", () => {
     ])
     expect(progress).toContain("调用 /api/user/self 校验登录状态")
   })
+
+  it("navigates back to the site root before extracting auth when the page is still on /login", async () => {
+    const progress: string[] = []
+    let currentUrl = "https://demo.example.com/login"
+    let selfCalls = 0
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async (input, init) => {
+        if (typeof input === "string" && input.endsWith("/api/user/self")) {
+          selfCalls += 1
+          const headers = new Headers(init?.headers)
+          const auth = headers.get("Authorization")
+          return new Response(
+            JSON.stringify({
+              success: Boolean(auth),
+              data: auth
+                ? {
+                    id: 1,
+                    username: "alice",
+                    quota: 42,
+                  }
+                : null,
+              message: auth ? "" : "未登录且未提供 access token",
+            }),
+            { status: auth ? 200 : 401 },
+          )
+        }
+
+        throw new Error(`unexpected fetch input: ${String(input)}`)
+      },
+    )
+
+    const context = {
+      async cookies() {
+        return []
+      },
+    }
+    const page = {
+      url() {
+        return currentUrl
+      },
+      async goto(url: string) {
+        currentUrl = url
+      },
+      async evaluate() {
+        return currentUrl.endsWith("/login") ? "" : "fresh-token"
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    const result = await (service as unknown as {
+      captureAuthenticatedAccount: (
+        page: typeof page,
+        context: typeof context,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<SiteAccount | null>
+    }).captureAuthenticatedAccount(page, context, baseAccount, baseProfile, {
+      onProgress(message) {
+        progress.push(message)
+      },
+    })
+
+    expect(selfCalls).toBe(1)
+    expect(currentUrl).toBe("https://demo.example.com")
+    expect(result?.account_info.access_token).toBe("fresh-token")
+    expect(progress).toContain("返回目标站点主页：https://demo.example.com")
+  })
 })
