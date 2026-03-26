@@ -172,13 +172,6 @@ export class CheckinOrchestrator {
               fetchImpl: this.fetchImpl,
             })
           }
-        } else if (
-          refreshResult.status === "failed" &&
-          refreshResult.message.includes("未提取到 access token")
-        ) {
-          const browserSessionResult =
-            await this.sessionRefresher.checkInWithBrowserSession?.(account)
-          result = browserSessionResult ?? buildRefreshFailureResult(account, refreshResult)
         } else {
           result = buildRefreshFailureResult(account, refreshResult)
         }

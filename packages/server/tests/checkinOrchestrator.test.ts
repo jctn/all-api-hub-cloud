@@ -221,7 +221,7 @@ describe("CheckinOrchestrator", () => {
     expect(requests).toContain("Bearer fresh-token")
   })
 
-  it("falls back to browser-session check-in when refresh finds a logged-in cookie session but no token", async () => {
+  it("surfaces refresh failure when login succeeds but token extraction still fails", async () => {
     const cookieOnlyAccount: SiteAccount = {
       ...baseAccount,
       account_info: {
@@ -234,6 +234,7 @@ describe("CheckinOrchestrator", () => {
       },
     }
     const repository = await createRepositoryWithAccounts([cookieOnlyAccount])
+    let browserFallbackCalls = 0
 
     const refresher = {
       async refreshSiteSession(): Promise<SessionRefreshResult> {
@@ -243,6 +244,7 @@ describe("CheckinOrchestrator", () => {
         }
       },
       async checkInWithBrowserSession(): Promise<CheckinAccountResult> {
+        browserFallbackCalls += 1
         const now = Date.now()
         return {
           accountId: cookieOnlyAccount.id,
@@ -255,11 +257,7 @@ describe("CheckinOrchestrator", () => {
           completedAt: now,
         }
       },
-    } satisfies SiteSessionRefresher & {
-      checkInWithBrowserSession: (
-        account: SiteAccount,
-      ) => Promise<CheckinAccountResult>
-    }
+    } satisfies SiteSessionRefresher
 
     const orchestrator = new CheckinOrchestrator(
       repository,
@@ -292,9 +290,10 @@ describe("CheckinOrchestrator", () => {
     })
 
     expect(result.refreshedAccountIds).toEqual([])
-    expect(result.record.summary.success).toBe(1)
-    expect(result.record.results[0].status).toBe(CheckinResultStatus.Success)
-    expect(result.record.results[0].message).toContain("浏览器会话补签")
+    expect(browserFallbackCalls).toBe(0)
+    expect(result.record.summary.failed).toBe(1)
+    expect(result.record.results[0].status).toBe(CheckinResultStatus.Failed)
+    expect(result.record.results[0].message).toContain("登录成功但未提取到 access token")
   })
 
   it("includes reward delta when anyrouter login refresh counts as a successful check-in", async () => {
