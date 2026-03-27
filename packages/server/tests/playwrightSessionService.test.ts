@@ -323,9 +323,13 @@ describe("PlaywrightSiteSessionService", () => {
       url() {
         return baseAccount.site_url
       },
-      async evaluate() {
-        tokenReads += 1
-        return tokenReads >= 3 ? "fresh-token" : ""
+      async evaluate(_fn?: unknown, arg?: unknown) {
+        if (Array.isArray(arg)) {
+          tokenReads += 1
+          return tokenReads >= 3 ? "fresh-token" : ""
+        }
+
+        return ""
       },
       async waitForTimeout(ms: number) {
         waits.push(ms)
@@ -590,6 +594,107 @@ describe("PlaywrightSiteSessionService", () => {
 
     expect(currentUrl).toBe("https://api.ouu.ch/console/personal")
     expect(result?.cookieAuth?.sessionCookie).toContain("signature=def")
+  })
+
+  it("merges document.cookie into the saved cookie bundle for Ouu refresh", async () => {
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async (input, init) => {
+        if (typeof input === "string" && input.endsWith("/api/user/self")) {
+          const headers = new Headers(init?.headers)
+          return new Response(
+            JSON.stringify({
+              success:
+                headers.get("Cookie") ===
+                "session=abc; cf_clearance=ghi; signature=def",
+              data: {
+                id: 4761,
+                username: "linuxdo_4761",
+                quota: 29_000_000,
+              },
+              message: "",
+            }),
+            { status: 200 },
+          )
+        }
+
+        throw new Error(`unexpected fetch input: ${String(input)}`)
+      },
+    )
+
+    const context = {
+      async cookies() {
+        return [
+          { name: "session", value: "abc" },
+          { name: "cf_clearance", value: "ghi" },
+        ]
+      },
+    }
+    const page = {
+      url() {
+        return "https://api.ouu.ch/console/personal"
+      },
+      async evaluate(fn: unknown, arg?: unknown) {
+        if (Array.isArray(arg)) {
+          return ""
+        }
+
+        if (typeof fn === "function") {
+          return (fn as () => string)()
+        }
+
+        return ""
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    const previousDocument = (globalThis as typeof globalThis & { document?: Document }).document
+    ;(globalThis as typeof globalThis & { document?: Document }).document = {
+      cookie: "signature=def",
+    } as Document
+
+    try {
+      const result = await (service as unknown as {
+        captureAuthenticatedAccount: (
+          page: typeof page,
+          context: typeof context,
+          account: SiteAccount,
+          profile: SiteLoginProfile,
+          options: { onProgress?: (message: string) => void | Promise<void> },
+        ) => Promise<SiteAccount | null>
+      }).captureAuthenticatedAccount(
+        page,
+        context,
+        {
+          ...baseAccount,
+          site_name: "OuuAPI",
+          site_url: "https://api.ouu.ch",
+          account_info: {
+            ...baseAccount.account_info,
+            access_token: "",
+          },
+          authType: AuthType.Cookie,
+        },
+        {
+          ...baseProfile,
+          hostname: "api.ouu.ch",
+        },
+        {},
+      )
+
+      expect(result?.cookieAuth?.sessionCookie).toBe(
+        "session=abc; cf_clearance=ghi; signature=def",
+      )
+    } finally {
+      if (previousDocument === undefined) {
+        delete (globalThis as typeof globalThis & { document?: Document }).document
+      } else {
+        ;(globalThis as typeof globalThis & { document?: Document }).document = previousDocument
+      }
+    }
   })
 
   it("extracts access tokens from nested storage payloads under generic keys", async () => {

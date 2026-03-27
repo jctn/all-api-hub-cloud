@@ -11,6 +11,7 @@ import {
   isAnyrouterSiteType,
   joinUrl,
   normalizeBaseUrl,
+  normalizeCookieHeaderValue,
   resolveCheckInPath,
   resolvePayloadMessage,
   resolveRewardFromData,
@@ -586,7 +587,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     profile: SiteLoginProfile,
   ): Promise<SiteAccount> {
     const targetBaseUrl = normalizeBaseUrl(account.site_url)
-    const cookieHeader = buildCookieHeader(await context.cookies([targetBaseUrl]))
+    const cookieHeader = await this.buildMergedCookieHeader(
+      context,
+      page,
+      targetBaseUrl,
+    )
     const accessToken = await this.extractAccessToken(page, profile)
     const now = Date.now()
 
@@ -605,6 +610,59 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       },
       cookieAuth: cookieHeader ? { sessionCookie: cookieHeader } : account.cookieAuth,
     }
+  }
+
+  private async buildMergedCookieHeader(
+    context: BrowserContext,
+    page: Page,
+    targetBaseUrl: string,
+  ): Promise<string> {
+    const networkCookieHeader = buildCookieHeader(await context.cookies([targetBaseUrl]))
+    const documentCookieHeader = await this.readDocumentCookieHeader(page)
+
+    return this.mergeCookieHeaders(networkCookieHeader, documentCookieHeader)
+  }
+
+  private async readDocumentCookieHeader(page: Page): Promise<string> {
+    return await page
+      .evaluate(() => document.cookie || "")
+      .then((value) => normalizeCookieHeaderValue(String(value)))
+      .catch(() => "")
+  }
+
+  private mergeCookieHeaders(...headers: string[]): string {
+    const cookieMap = new Map<string, string>()
+
+    for (const header of headers) {
+      const normalized = normalizeCookieHeaderValue(header)
+      if (!normalized) {
+        continue
+      }
+
+      for (const segment of normalized.split(";")) {
+        const trimmed = segment.trim()
+        if (!trimmed) {
+          continue
+        }
+
+        const separatorIndex = trimmed.indexOf("=")
+        if (separatorIndex <= 0) {
+          continue
+        }
+
+        const key = trimmed.slice(0, separatorIndex).trim()
+        const value = trimmed.slice(separatorIndex + 1).trim()
+        if (!key || !value) {
+          continue
+        }
+
+        cookieMap.set(key, value)
+      }
+    }
+
+    return Array.from(cookieMap.entries())
+      .map(([key, value]) => `${key}=${value}`)
+      .join("; ")
   }
 
   private async validateAuthenticatedAccount(
