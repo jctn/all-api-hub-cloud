@@ -788,6 +788,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       })
       .catch(() => undefined)
 
+    await this.reportProgress(options, "已注入 Ouu newapiwarn 脚本，等待 signature cookie")
+
     for (let attempt = 1; attempt <= OUU_SIGNATURE_ATTEMPTS; attempt += 1) {
       const hasSignatureCookie = await page
         .evaluate(() =>
@@ -807,6 +809,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         await page.waitForTimeout(OUU_SIGNATURE_RETRY_DELAY_MS)
       }
     }
+
+    await this.reportProgress(
+      options,
+      "仍未观察到 Ouu signature cookie，继续使用当前会话尝试后续校验",
+    )
   }
 
   private isCookieOnlyRefreshAllowed(account: SiteAccount): boolean {

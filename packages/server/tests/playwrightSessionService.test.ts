@@ -811,6 +811,8 @@ describe("PlaywrightSiteSessionService", () => {
       "session=abc; cf_clearance=ghi; signature=def",
     )
     expect(progress).toContain("检测到 Ouu newapiwarn SVG 已渲染但未触发，手工注入签名脚本")
+    expect(progress).toContain("已注入 Ouu newapiwarn 脚本，等待 signature cookie")
+    expect(progress).toContain("已观察到 Ouu signature cookie")
   })
 
   it("extracts access tokens from nested storage payloads under generic keys", async () => {
