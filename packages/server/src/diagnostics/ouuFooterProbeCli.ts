@@ -7,6 +7,7 @@ import { chromium } from "playwright"
 import { loadServerConfig, resolveServerConfig } from "../config.js"
 import {
   analyzeOuuFooterProbe,
+  hasSignatureCookie,
   type OuuFooterProbePageState,
   type OuuFooterProbeRequest,
 } from "./ouuFooterProbe.js"
@@ -67,11 +68,34 @@ async function capturePageState(page: import("playwright").Page): Promise<OuuFoo
       scriptSources: Array.from(document.scripts)
         .map((script) => script.src || "[inline]")
         .slice(0, 20),
+      documentCookie: document.cookie,
+      hasSignatureCookie: document.cookie
+        .split(";")
+        .map((entry) => entry.trim())
+        .some((entry) => entry.startsWith("signature=")),
       userAgent: navigator.userAgent,
       webdriver:
         typeof navigator.webdriver === "boolean" ? navigator.webdriver : null,
       platform: navigator.platform || null,
     }
+  })
+}
+
+async function injectWarnScript(page: import("playwright").Page): Promise<void> {
+  await page.evaluate(async () => {
+    const existing = document.querySelector('script[data-ouu-probe="warn-manual"]')
+    if (existing) {
+      return
+    }
+
+    await new Promise<void>((resolve) => {
+      const script = document.createElement("script")
+      script.src = "/newapiwarn/warnassets/script.js"
+      script.setAttribute("data-ouu-probe", "warn-manual")
+      script.onload = () => resolve()
+      script.onerror = () => resolve()
+      document.head.appendChild(script)
+    })
   })
 }
 
@@ -125,6 +149,29 @@ async function main() {
     }
 
     const analysis = analyzeOuuFooterProbe(result)
+    let manualInjection:
+      | {
+          attempted: boolean
+          page: OuuFooterProbePageState
+          injectedRequests: OuuFooterProbeRequest[]
+          signatureAppeared: boolean
+        }
+      | undefined
+
+    if (analysis.stage === "warn_script_not_injected") {
+      const requestStart = requests.length
+      await injectWarnScript(page)
+      await page.waitForTimeout(5_000)
+      const manualPageState = await capturePageState(page)
+      manualInjection = {
+        attempted: true,
+        page: manualPageState,
+        injectedRequests: requests.slice(requestStart),
+        signatureAppeared:
+          manualPageState.hasSignatureCookie ||
+          hasSignatureCookie(manualPageState.documentCookie),
+      }
+    }
 
     console.log(
       JSON.stringify(
@@ -133,6 +180,7 @@ async function main() {
           waitedMs: waitMs,
           analysis,
           result,
+          manualInjection,
         },
         null,
         2,

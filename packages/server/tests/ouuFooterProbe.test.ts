@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   analyzeOuuFooterProbe,
+  hasSignatureCookie,
   type OuuFooterProbeResult,
 } from "../src/diagnostics/ouuFooterProbe.js"
 
@@ -106,5 +107,13 @@ describe("analyzeOuuFooterProbe", () => {
 
     expect(analysis.stage).toBe("warn_script_injected")
     expect(analysis.summary).toContain("newapiwarn")
+  })
+
+  it("detects the signature cookie from document.cookie", () => {
+    expect(hasSignatureCookie("session=abc; signature=xyz; cf_clearance=demo")).toBe(
+      true,
+    )
+    expect(hasSignatureCookie("session=abc; cf_clearance=demo")).toBe(false)
+    expect(hasSignatureCookie("")).toBe(false)
   })
 })

@@ -14,6 +14,8 @@ export interface OuuFooterProbePageState {
   warnSvgHtml: string | null
   hasWarnScriptTag: boolean
   scriptSources: string[]
+  documentCookie: string
+  hasSignatureCookie: boolean
   userAgent: string
   webdriver: boolean | null
   platform: string | null
@@ -43,6 +45,17 @@ function hasNewapiwarnRequest(result: OuuFooterProbeResult): boolean {
       request.url.includes("/newapiwarn/warnassets/script.js") ||
       request.url.includes("/newapiwarn/login"),
   )
+}
+
+export function hasSignatureCookie(documentCookie: string | null | undefined): boolean {
+  if (!documentCookie) {
+    return false
+  }
+
+  return documentCookie
+    .split(";")
+    .map((entry) => entry.trim())
+    .some((entry) => entry.startsWith("signature="))
 }
 
 export function analyzeOuuFooterProbe(
