@@ -66,6 +66,8 @@ const GITHUB_AUTHORIZE_SELECTORS = [
 const AUTH_SELF_VALIDATION_ATTEMPTS = 5
 const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
 const COOKIE_ONLY_REFRESH_HOSTS = new Set(["api.ouu.ch", "kfc-api.sxxe.net"])
+const OUU_SIGNATURE_ATTEMPTS = 5
+const OUU_SIGNATURE_RETRY_DELAY_MS = 1_000
 
 type TokenStorageKind = "localStorage" | "sessionStorage"
 
@@ -541,6 +543,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       })
     }
 
+    await this.ensureOuuWarnScriptSignature(page, account, options)
     await this.reportProgress(options, "提取 cookie 与 access token")
     await this.reportProgress(options, "调用 /api/user/self 校验登录状态")
     const synced = await this.validateAuthenticatedAccount(
@@ -718,11 +721,107 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return null
   }
 
+  private async ensureOuuWarnScriptSignature(
+    page: Page,
+    account: SiteAccount,
+    options: SessionRefreshOptions,
+  ): Promise<void> {
+    if (!this.isOuuSite(account)) {
+      return
+    }
+
+    const state = await page
+      .evaluate(() => {
+        const footerHtml = localStorage.getItem("footer_html") || ""
+        const warnSvg = document.querySelector('svg[onload*="newapiwarn"]')
+        const warnScript = document.querySelector(
+          'script[src*="/newapiwarn/warnassets/script.js"]',
+        )
+        const hasSignatureCookie = document.cookie
+          .split(";")
+          .map((entry) => entry.trim())
+          .some((entry) => entry.startsWith("signature="))
+
+        return {
+          footerHtml,
+          hasWarnSvg: Boolean(warnSvg),
+          hasWarnScriptTag: Boolean(warnScript),
+          hasSignatureCookie,
+        }
+      })
+      .catch(() => ({
+        footerHtml: "",
+        hasWarnSvg: false,
+        hasWarnScriptTag: false,
+        hasSignatureCookie: false,
+      }))
+
+    if (
+      !state.footerHtml ||
+      !state.hasWarnSvg ||
+      state.hasWarnScriptTag ||
+      state.hasSignatureCookie
+    ) {
+      return
+    }
+
+    await this.reportProgress(
+      options,
+      "检测到 Ouu newapiwarn SVG 已渲染但未触发，手工注入签名脚本",
+    )
+
+    await page
+      .evaluate(async () => {
+        const existing = document.querySelector('script[data-ouu-probe="warn-manual"]')
+        if (existing) {
+          return
+        }
+
+        await new Promise<void>((resolve) => {
+          const script = document.createElement("script")
+          script.src = "/newapiwarn/warnassets/script.js"
+          script.setAttribute("data-ouu-probe", "warn-manual")
+          script.onload = () => resolve()
+          script.onerror = () => resolve()
+          document.head.appendChild(script)
+        })
+      })
+      .catch(() => undefined)
+
+    for (let attempt = 1; attempt <= OUU_SIGNATURE_ATTEMPTS; attempt += 1) {
+      const hasSignatureCookie = await page
+        .evaluate(() =>
+          document.cookie
+            .split(";")
+            .map((entry) => entry.trim())
+            .some((entry) => entry.startsWith("signature=")),
+        )
+        .catch(() => false)
+
+      if (hasSignatureCookie) {
+        await this.reportProgress(options, "已观察到 Ouu signature cookie")
+        return
+      }
+
+      if (attempt < OUU_SIGNATURE_ATTEMPTS) {
+        await page.waitForTimeout(OUU_SIGNATURE_RETRY_DELAY_MS)
+      }
+    }
+  }
+
   private isCookieOnlyRefreshAllowed(account: SiteAccount): boolean {
     try {
       return COOKIE_ONLY_REFRESH_HOSTS.has(
         new URL(account.site_url).hostname.toLowerCase(),
       )
+    } catch {
+      return false
+    }
+  }
+
+  private isOuuSite(account: SiteAccount): boolean {
+    try {
+      return new URL(account.site_url).hostname.toLowerCase() === "api.ouu.ch"
     } catch {
       return false
     }

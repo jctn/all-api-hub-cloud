@@ -698,6 +698,122 @@ describe("PlaywrightSiteSessionService", () => {
   })
 
   it("extracts access tokens from nested storage payloads under generic keys", async () => {
+    const progress: string[] = []
+    let warnScriptInjected = false
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async (input, init) => {
+        if (typeof input === "string" && input.endsWith("/api/user/self")) {
+          const headers = new Headers(init?.headers)
+          return new Response(
+            JSON.stringify({
+              success:
+                headers.get("Cookie") ===
+                "session=abc; cf_clearance=ghi; signature=def",
+              data: {
+                id: 4761,
+                username: "linuxdo_4761",
+                quota: 29_000_000,
+              },
+              message: "",
+            }),
+            { status: 200 },
+          )
+        }
+
+        throw new Error(`unexpected fetch input: ${String(input)}`)
+      },
+    )
+
+    const context = {
+      async cookies() {
+        return [
+          { name: "session", value: "abc" },
+          { name: "cf_clearance", value: "ghi" },
+        ]
+      },
+    }
+    const page = {
+      url() {
+        return "https://api.ouu.ch/console/personal"
+      },
+      async evaluate<TArg, TResult>(
+        fn: ((arg: TArg) => TResult) | (() => TResult),
+        arg?: TArg,
+      ): Promise<TResult> {
+        const source = String(fn)
+        if (source.includes('localStorage.getItem("footer_html")')) {
+          return {
+            footerHtml:
+              '<svg width="0" height="0" style="visibility:hidden;position:absolute;" onload="(function(){var s=document.createElement(\'script\');s.src=\'/newapiwarn/warnassets/script.js\';document.head.appendChild(s);})()"></svg>',
+            hasWarnSvg: true,
+            hasWarnScriptTag: warnScriptInjected,
+            hasSignatureCookie: warnScriptInjected,
+          } as TResult
+        }
+
+        if (source.includes('data-ouu-probe')) {
+          warnScriptInjected = true
+          return undefined as TResult
+        }
+
+        if (Array.isArray(arg)) {
+          return "" as TResult
+        }
+
+        if (source.includes("document.cookie")) {
+          return (warnScriptInjected ? "signature=def" : "") as TResult
+        }
+
+        return "" as TResult
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    const result = await (service as unknown as {
+      captureAuthenticatedAccount: (
+        page: typeof page,
+        context: typeof context,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<SiteAccount | null>
+    }).captureAuthenticatedAccount(
+      page,
+      context,
+      {
+        ...baseAccount,
+        site_name: "OuuAPI",
+        site_url: "https://api.ouu.ch",
+        account_info: {
+          ...baseAccount.account_info,
+          access_token: "",
+        },
+        authType: AuthType.Cookie,
+      },
+      {
+        ...baseProfile,
+        hostname: "api.ouu.ch",
+      },
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(warnScriptInjected).toBe(true)
+    expect(result?.cookieAuth?.sessionCookie).toBe(
+      "session=abc; cf_clearance=ghi; signature=def",
+    )
+    expect(progress).toContain("检测到 Ouu newapiwarn SVG 已渲染但未触发，手工注入签名脚本")
+  })
+
+  it("extracts access tokens from nested storage payloads under generic keys", async () => {
     const service = new PlaywrightSiteSessionService(
       {} as StorageRepository,
       baseConfig,
