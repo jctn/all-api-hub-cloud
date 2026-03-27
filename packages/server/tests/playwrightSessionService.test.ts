@@ -346,6 +346,88 @@ describe("PlaywrightSiteSessionService", () => {
     expect(waits).toEqual([1000, 1000])
   })
 
+  it("accepts cookie-only authenticated sessions for api.ouu.ch", async () => {
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async (input, init) => {
+        if (typeof input === "string" && input.endsWith("/api/user/self")) {
+          const headers = new Headers(init?.headers)
+          return new Response(
+            JSON.stringify({
+              success: headers.get("Cookie") === "session=abc; signature=def; cf_clearance=ghi",
+              data: {
+                id: 4761,
+                username: "linuxdo_4761",
+                quota: 29_000_000,
+              },
+              message: "",
+            }),
+            { status: 200 },
+          )
+        }
+
+        throw new Error(`unexpected fetch input: ${String(input)}`)
+      },
+    )
+
+    const context = {
+      async cookies() {
+        return [
+          { name: "session", value: "abc" },
+          { name: "signature", value: "def" },
+          { name: "cf_clearance", value: "ghi" },
+        ]
+      },
+    }
+    const page = {
+      url() {
+        return "https://api.ouu.ch/console/personal"
+      },
+      async evaluate() {
+        return ""
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    const result = await (service as unknown as {
+      captureAuthenticatedAccount: (
+        page: typeof page,
+        context: typeof context,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<SiteAccount | null>
+    }).captureAuthenticatedAccount(
+      page,
+      context,
+      {
+        ...baseAccount,
+        site_name: "OuuAPI",
+        site_url: "https://api.ouu.ch",
+        account_info: {
+          ...baseAccount.account_info,
+          access_token: "",
+        },
+        authType: AuthType.Cookie,
+      },
+      {
+        ...baseProfile,
+        hostname: "api.ouu.ch",
+      },
+      {},
+    )
+
+    expect(result?.authType).toBe(AuthType.Cookie)
+    expect(result?.account_info.access_token).toBe("")
+    expect(result?.cookieAuth?.sessionCookie).toBe(
+      "session=abc; signature=def; cf_clearance=ghi",
+    )
+    expect(result?.account_info.id).toBe(4761)
+  })
+
   it("extracts access tokens from nested storage payloads under generic keys", async () => {
     const service = new PlaywrightSiteSessionService(
       {} as StorageRepository,

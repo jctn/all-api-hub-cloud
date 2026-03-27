@@ -64,6 +64,7 @@ const GITHUB_AUTHORIZE_SELECTORS = [
 ]
 const AUTH_SELF_VALIDATION_ATTEMPTS = 5
 const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
+const COOKIE_ONLY_REFRESH_HOSTS = new Set(["api.ouu.ch"])
 
 type TokenStorageKind = "localStorage" | "sessionStorage"
 
@@ -613,6 +614,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     options: SessionRefreshOptions,
   ): Promise<{ account: SiteAccount; snapshot: SiteAccount } | null> {
     let lastCookieOnlySession: { account: SiteAccount; snapshot: SiteAccount } | null = null
+    const allowCookieOnlySession =
+      isAnyrouterSiteType(account.site_type) || this.isCookieOnlyRefreshAllowed(account)
 
     for (let attempt = 1; attempt <= AUTH_SELF_VALIDATION_ATTEMPTS; attempt += 1) {
       const snapshot = await this.buildAuthenticatedAccountSnapshot(
@@ -630,7 +633,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         const token =
           snapshot.account_info.access_token.trim() ||
           synced.account_info.access_token.trim()
-        if (token || isAnyrouterSiteType(account.site_type)) {
+        if (token || allowCookieOnlySession) {
           return {
             account: synced,
             snapshot,
@@ -654,6 +657,16 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     return null
+  }
+
+  private isCookieOnlyRefreshAllowed(account: SiteAccount): boolean {
+    try {
+      return COOKIE_ONLY_REFRESH_HOSTS.has(
+        new URL(account.site_url).hostname.toLowerCase(),
+      )
+    } catch {
+      return false
+    }
   }
 
   private async performBrowserSessionCheckin(
