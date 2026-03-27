@@ -90,6 +90,26 @@ function isScheduledBatchCandidate(account: SiteAccount): boolean {
   )
 }
 
+function isRunAnytimeTurnstileFallbackCandidate(
+  account: SiteAccount,
+  options: BatchCheckinRunOptions,
+  result: CheckinAccountResult,
+): boolean {
+  if (options.mode !== "manual" || !options.accountId) {
+    return false
+  }
+
+  if (!result.message.includes("Turnstile token 为空")) {
+    return false
+  }
+
+  try {
+    return new URL(account.site_url).hostname.toLowerCase() === "runanytime.hxi.me"
+  } catch {
+    return false
+  }
+}
+
 export class CheckinOrchestrator {
   constructor(
     private readonly repository: StorageRepository,
@@ -116,6 +136,15 @@ export class CheckinOrchestrator {
         mode: options.mode,
         fetchImpl: this.fetchImpl,
       })
+
+      if (isRunAnytimeTurnstileFallbackCandidate(account, options, result)) {
+        const browserSessionResult =
+          await this.sessionRefresher.checkInWithBrowserSession?.(account)
+        if (browserSessionResult) {
+          results.push(browserSessionResult)
+          continue
+        }
+      }
 
       const hasProfile = Boolean(
         matchOrDefaultSiteLoginProfile(account.site_url, this.config.siteLoginProfiles, account.site_type),
