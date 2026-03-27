@@ -285,7 +285,7 @@ describe("PlaywrightSiteSessionService", () => {
     expect(selfCalls).toBe(1)
     expect(currentUrl).toBe("https://demo.example.com")
     expect(result?.account_info.access_token).toBe("fresh-token")
-    expect(progress).toContain("返回目标站点主页：https://demo.example.com")
+    expect(progress).toContain("返回目标站点页面：https://demo.example.com")
   })
 
   it("waits for an access token even when /api/user/self already succeeds with cookie auth", async () => {
@@ -426,6 +426,94 @@ describe("PlaywrightSiteSessionService", () => {
       "session=abc; signature=def; cf_clearance=ghi",
     )
     expect(result?.account_info.id).toBe(4761)
+  })
+
+  it("navigates to the Ouu check-in page before capturing cookie-only auth so the signature cookie is present", async () => {
+    let currentUrl = "https://api.ouu.ch/login"
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async (input, init) => {
+        if (typeof input === "string" && input.endsWith("/api/user/self")) {
+          const headers = new Headers(init?.headers)
+          return new Response(
+            JSON.stringify({
+              success: headers.get("Cookie")?.includes("signature=def") === true,
+              data: {
+                id: 4761,
+                username: "linuxdo_4761",
+                quota: 29_000_000,
+              },
+              message: "",
+            }),
+            { status: 200 },
+          )
+        }
+
+        throw new Error(`unexpected fetch input: ${String(input)}`)
+      },
+    )
+
+    const context = {
+      async cookies() {
+        return currentUrl.endsWith("/console/personal")
+          ? [
+              { name: "session", value: "abc" },
+              { name: "signature", value: "def" },
+              { name: "cf_clearance", value: "ghi" },
+            ]
+          : [
+              { name: "session", value: "abc" },
+              { name: "cf_clearance", value: "ghi" },
+            ]
+      },
+    }
+    const page = {
+      url() {
+        return currentUrl
+      },
+      async goto(url: string) {
+        currentUrl = url
+      },
+      async evaluate() {
+        return ""
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    const result = await (service as unknown as {
+      captureAuthenticatedAccount: (
+        page: typeof page,
+        context: typeof context,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<SiteAccount | null>
+    }).captureAuthenticatedAccount(
+      page,
+      context,
+      {
+        ...baseAccount,
+        site_name: "OuuAPI",
+        site_url: "https://api.ouu.ch",
+        account_info: {
+          ...baseAccount.account_info,
+          access_token: "",
+        },
+        authType: AuthType.Cookie,
+      },
+      {
+        ...baseProfile,
+        hostname: "api.ouu.ch",
+      },
+      {},
+    )
+
+    expect(currentUrl).toBe("https://api.ouu.ch/console/personal")
+    expect(result?.cookieAuth?.sessionCookie).toContain("signature=def")
   })
 
   it("extracts access tokens from nested storage payloads under generic keys", async () => {

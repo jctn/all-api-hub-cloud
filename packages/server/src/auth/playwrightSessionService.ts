@@ -525,6 +525,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     options: SessionRefreshOptions,
   ): Promise<SiteAccount | null> {
     const targetBaseUrl = normalizeBaseUrl(account.site_url)
+    const captureUrl = this.resolvePostLoginCaptureUrl(account)
     const currentUrl = page.url()
     const currentPath = this.getUrlPathname(currentUrl)
     if (
@@ -532,8 +533,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       currentPath.includes("/login") ||
       currentPath.includes("/auth")
     ) {
-      await this.reportProgress(options, `返回目标站点主页：${targetBaseUrl}`)
-      await page.goto(targetBaseUrl, {
+      await this.reportProgress(options, `返回目标站点页面：${captureUrl}`)
+      await page.goto(captureUrl, {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       })
@@ -667,6 +668,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     } catch {
       return false
     }
+  }
+
+  private resolvePostLoginCaptureUrl(account: SiteAccount): string {
+    if (this.isCookieOnlyRefreshAllowed(account)) {
+      return joinUrl(account.site_url, resolveCheckInPath(account.site_type))
+    }
+
+    return normalizeBaseUrl(account.site_url)
   }
 
   private async performBrowserSessionCheckin(
