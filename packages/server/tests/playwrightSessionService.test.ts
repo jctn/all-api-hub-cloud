@@ -428,6 +428,82 @@ describe("PlaywrightSiteSessionService", () => {
     expect(result?.account_info.id).toBe(4761)
   })
 
+  it("accepts cookie-only authenticated sessions for kfc-api.sxxe.net", async () => {
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async (input, init) => {
+        if (typeof input === "string" && input.endsWith("/api/user/self")) {
+          const headers = new Headers(init?.headers)
+          return new Response(
+            JSON.stringify({
+              success: headers.get("Cookie") === "session=abc",
+              data: {
+                id: 7437,
+                username: "linuxdo_7437",
+                quota: 121_000_000,
+              },
+              message: "",
+            }),
+            { status: 200 },
+          )
+        }
+
+        throw new Error(`unexpected fetch input: ${String(input)}`)
+      },
+    )
+
+    const context = {
+      async cookies() {
+        return [{ name: "session", value: "abc" }]
+      },
+    }
+    const page = {
+      url() {
+        return "https://kfc-api.sxxe.net/console/personal"
+      },
+      async evaluate() {
+        return ""
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    const result = await (service as unknown as {
+      captureAuthenticatedAccount: (
+        page: typeof page,
+        context: typeof context,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<SiteAccount | null>
+    }).captureAuthenticatedAccount(
+      page,
+      context,
+      {
+        ...baseAccount,
+        site_name: "KFC API",
+        site_url: "https://kfc-api.sxxe.net",
+        account_info: {
+          ...baseAccount.account_info,
+          access_token: "",
+        },
+        authType: AuthType.Cookie,
+      },
+      {
+        ...baseProfile,
+        hostname: "kfc-api.sxxe.net",
+      },
+      {},
+    )
+
+    expect(result?.authType).toBe(AuthType.Cookie)
+    expect(result?.account_info.access_token).toBe("")
+    expect(result?.cookieAuth?.sessionCookie).toBe("session=abc")
+    expect(result?.account_info.id).toBe(7437)
+  })
+
   it("navigates to the Ouu check-in page before capturing cookie-only auth so the signature cookie is present", async () => {
     let currentUrl = "https://api.ouu.ch/login"
 

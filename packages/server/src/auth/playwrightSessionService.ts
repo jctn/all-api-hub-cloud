@@ -64,7 +64,7 @@ const GITHUB_AUTHORIZE_SELECTORS = [
 ]
 const AUTH_SELF_VALIDATION_ATTEMPTS = 5
 const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
-const COOKIE_ONLY_REFRESH_HOSTS = new Set(["api.ouu.ch"])
+const COOKIE_ONLY_REFRESH_HOSTS = new Set(["api.ouu.ch", "kfc-api.sxxe.net"])
 
 type TokenStorageKind = "localStorage" | "sessionStorage"
 
