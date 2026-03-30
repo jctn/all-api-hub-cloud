@@ -97,10 +97,6 @@ function isRunAnytimeTurnstileFallbackCandidate(
   options: BatchCheckinRunOptions,
   result: CheckinAccountResult,
 ): boolean {
-  if (options.mode !== "manual" || !options.accountId) {
-    return false
-  }
-
   if (!result.message.includes("Turnstile token 为空")) {
     return false
   }

@@ -876,21 +876,37 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     await this.reportProgress(options, "使用浏览器上下文点击签到按钮")
 
     try {
+      const shouldNormalizeHeaders = !this.isRunAnytimeSite(account)
       const routePattern = "**/api/user/checkin*"
-      await page.route(routePattern, async (route, request) => {
-        await route.continue({
-          headers: this.buildBrowserSessionCheckinHeaders(request.headers()),
+      if (shouldNormalizeHeaders) {
+        await page.route(routePattern, async (route, request) => {
+          await route.continue({
+            headers: this.buildBrowserSessionCheckinHeaders(request.headers()),
+          })
         })
-      })
+      }
 
       let browserResponse: { statusCode: number; rawText: string } | null = null
       try {
         const responsePromise = page.waitForResponse(
           (response) =>
             response.url().startsWith(apiUrl) &&
+            (!this.isRunAnytimeSite(account) ||
+              !response.url().toLowerCase().includes("turnstile=")) &&
             response.request().method().toUpperCase() === "POST",
           { timeout: 15_000 },
         )
+        const runAnytimeFollowupResponsePromise = this.isRunAnytimeSite(account)
+          ? page
+              .waitForResponse(
+                (response) =>
+                  response.url().startsWith(apiUrl) &&
+                  response.url().toLowerCase().includes("turnstile=") &&
+                  response.request().method().toUpperCase() === "POST",
+                { timeout: 30_000 },
+              )
+              .catch(() => null)
+          : null
 
         const clicked = await this.clickFirstVisible(page, [
           "button:has-text('Check in now')",
@@ -908,8 +924,30 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           statusCode: response.status(),
           rawText: await response.text().catch(() => ""),
         }
+
+        const firstPayload = this.tryParseJsonRecord(browserResponse.rawText)
+        const firstMessage = resolvePayloadMessage(firstPayload, browserResponse.rawText)
+        if (
+          this.isRunAnytimeSite(account) &&
+          firstMessage.includes("Turnstile token 为空") &&
+          runAnytimeFollowupResponsePromise
+        ) {
+          await this.reportProgress(
+            options,
+            "检测到首次签到响应要求 Turnstile，等待浏览器完成后续验证",
+          )
+          const followupResponse = await runAnytimeFollowupResponsePromise
+          if (followupResponse) {
+            browserResponse = {
+              statusCode: followupResponse.status(),
+              rawText: await followupResponse.text().catch(() => ""),
+            }
+          }
+        }
       } finally {
-        await page.unroute(routePattern).catch(() => undefined)
+        if (shouldNormalizeHeaders) {
+          await page.unroute(routePattern).catch(() => undefined)
+        }
       }
 
       if (!browserResponse) {
@@ -1057,6 +1095,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return ["已经签到", "已签到", "今天已经签到", "already"].some((snippet) =>
       normalized.includes(snippet.toLowerCase()),
     )
+  }
+
+  private isRunAnytimeSite(account: SiteAccount): boolean {
+    try {
+      return new URL(account.site_url).hostname.toLowerCase() === "runanytime.hxi.me"
+    } catch {
+      return false
+    }
   }
 
   private isManualActionRequiredMessage(message: string): boolean {

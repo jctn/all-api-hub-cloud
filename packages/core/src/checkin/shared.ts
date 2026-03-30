@@ -98,6 +98,7 @@ export function resolvePayloadMessage(
 export function resolveRewardFromData(data: unknown): string {
   const rewardKeys = [
     "quota",
+    "quota_awarded",
     "reward",
     "amount",
     "bonus",

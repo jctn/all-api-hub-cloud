@@ -981,6 +981,156 @@ describe("PlaywrightSiteSessionService", () => {
     expect(progress).toContain("使用浏览器上下文点击签到按钮")
   })
 
+  it("waits for the second runanytime check-in response after turnstile challenge completes", async () => {
+    const progress: string[] = []
+    let routeCalls = 0
+    let unrouteCalls = 0
+    let responseCall = 0
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async () => {
+        throw new Error("unexpected node fetch call")
+      },
+    )
+
+    const page = {
+      url() {
+        return "https://runanytime.hxi.me/console/personal"
+      },
+      async evaluate(_fn: unknown, arg?: unknown) {
+        if (Array.isArray(arg)) {
+          return ""
+        }
+      },
+      async goto() {
+        return undefined
+      },
+      async route() {
+        routeCalls += 1
+        return undefined
+      },
+      async unroute() {
+        unrouteCalls += 1
+        return undefined
+      },
+      async waitForResponse(
+        predicate: (response: {
+          url(): string
+          request(): { method(): string }
+        }) => boolean,
+      ) {
+        responseCall += 1
+        if (responseCall === 1) {
+          const response = {
+            url() {
+              return "https://runanytime.hxi.me/api/user/checkin?pow_challenge=abc&pow_nonce=1"
+            },
+            request() {
+              return {
+                method() {
+                  return "POST"
+                },
+              }
+            },
+            status() {
+              return 200
+            },
+            async text() {
+              return JSON.stringify({
+                success: false,
+                message: "Turnstile token 为空",
+              })
+            },
+          }
+          expect(predicate(response)).toBe(true)
+          return response
+        }
+
+        const response = {
+          url() {
+            return "https://runanytime.hxi.me/api/user/checkin?turnstile=cf-token&pow_challenge=abc&pow_nonce=2"
+          },
+          request() {
+            return {
+              method() {
+                return "POST"
+              },
+            }
+          },
+          status() {
+            return 200
+          },
+          async text() {
+            return JSON.stringify({
+              success: true,
+              message: "签到成功",
+              data: {
+                quota_awarded: 12500000,
+              },
+            })
+          },
+        }
+        expect(predicate(response)).toBe(true)
+        return response
+      },
+      locator(selector: string) {
+        return {
+          first() {
+            return {
+              async count() {
+                return selector.includes("立即签到") ? 1 : 0
+              },
+              async isVisible() {
+                return selector.includes("立即签到")
+              },
+              async click() {
+                return undefined
+              },
+            }
+          },
+        }
+      },
+    }
+
+    const result = await (service as unknown as {
+      performBrowserSessionCheckin: (
+        page: typeof page,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<{
+        status: CheckinResultStatus
+        message: string
+      }>
+    }).performBrowserSessionCheckin(
+      page,
+      {
+        ...baseAccount,
+        site_name: "随时跑路公益站",
+        site_url: "https://runanytime.hxi.me",
+      },
+      {
+        ...baseProfile,
+        hostname: "runanytime.hxi.me",
+      },
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(result.status).toBe(CheckinResultStatus.Success)
+    expect(result.message).toContain("签到成功")
+    expect(result.message).toContain("已通过浏览器会话补签")
+    expect(result.message).toContain("获得")
+    expect(routeCalls).toBe(0)
+    expect(unrouteCalls).toBe(0)
+    expect(progress).toContain("检测到首次签到响应要求 Turnstile，等待浏览器完成后续验证")
+  })
+
   it("normalizes browser-session check-in headers so they do not expose HeadlessChrome", () => {
     const service = new PlaywrightSiteSessionService(
       {} as StorageRepository,
