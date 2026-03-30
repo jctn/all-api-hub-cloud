@@ -981,11 +981,11 @@ describe("PlaywrightSiteSessionService", () => {
     expect(progress).toContain("使用浏览器上下文点击签到按钮")
   })
 
-  it("waits for the second runanytime check-in response after turnstile challenge completes", async () => {
+  it("uses the direct runanytime PoW flow before falling back to page clicks", async () => {
     const progress: string[] = []
     let routeCalls = 0
     let unrouteCalls = 0
-    let responseCall = 0
+    let evaluateCalls = 0
 
     const service = new PlaywrightSiteSessionService(
       {} as StorageRepository,
@@ -1000,9 +1000,58 @@ describe("PlaywrightSiteSessionService", () => {
         return "https://runanytime.hxi.me/console/personal"
       },
       async evaluate(_fn: unknown, arg?: unknown) {
-        if (Array.isArray(arg)) {
-          return ""
+        evaluateCalls += 1
+        if (
+          arg &&
+          typeof arg === "object" &&
+          "fallbackUserId" in arg &&
+          typeof arg.fallbackUserId === "string"
+        ) {
+          return {
+            challenge: {
+              statusCode: 200,
+              rawText: JSON.stringify({
+                success: true,
+                data: {
+                  challenge_id: "abc",
+                  prefix: "checkin:123:8465:seed:",
+                  difficulty: 18,
+                },
+              }),
+              payload: {
+                success: true,
+                data: {
+                  challenge_id: "abc",
+                  prefix: "checkin:123:8465:seed:",
+                  difficulty: 18,
+                },
+              },
+            },
+            solved: {
+              nonce: "000275a6",
+              attempts: 161191,
+            },
+            checkin: {
+              statusCode: 200,
+              rawText: JSON.stringify({
+                success: true,
+                message: "签到成功",
+                data: {
+                  quota_awarded: 12500000,
+                },
+              }),
+              payload: {
+                success: true,
+                message: "签到成功",
+                data: {
+                  quota_awarded: 12500000,
+                },
+              },
+            },
+          }
         }
+
+        return ""
       },
       async goto() {
         return undefined
@@ -1014,66 +1063,6 @@ describe("PlaywrightSiteSessionService", () => {
       async unroute() {
         unrouteCalls += 1
         return undefined
-      },
-      async waitForResponse(
-        predicate: (response: {
-          url(): string
-          request(): { method(): string }
-        }) => boolean,
-      ) {
-        responseCall += 1
-        if (responseCall === 1) {
-          const response = {
-            url() {
-              return "https://runanytime.hxi.me/api/user/checkin?pow_challenge=abc&pow_nonce=1"
-            },
-            request() {
-              return {
-                method() {
-                  return "POST"
-                },
-              }
-            },
-            status() {
-              return 200
-            },
-            async text() {
-              return JSON.stringify({
-                success: false,
-                message: "Turnstile token 为空",
-              })
-            },
-          }
-          expect(predicate(response)).toBe(true)
-          return response
-        }
-
-        const response = {
-          url() {
-            return "https://runanytime.hxi.me/api/user/checkin?turnstile=cf-token&pow_challenge=abc&pow_nonce=2"
-          },
-          request() {
-            return {
-              method() {
-                return "POST"
-              },
-            }
-          },
-          status() {
-            return 200
-          },
-          async text() {
-            return JSON.stringify({
-              success: true,
-              message: "签到成功",
-              data: {
-                quota_awarded: 12500000,
-              },
-            })
-          },
-        }
-        expect(predicate(response)).toBe(true)
-        return response
       },
       locator(selector: string) {
         return {
@@ -1126,9 +1115,10 @@ describe("PlaywrightSiteSessionService", () => {
     expect(result.message).toContain("签到成功")
     expect(result.message).toContain("已通过浏览器会话补签")
     expect(result.message).toContain("获得")
+    expect(evaluateCalls).toBeGreaterThan(0)
     expect(routeCalls).toBe(0)
     expect(unrouteCalls).toBe(0)
-    expect(progress).toContain("检测到首次签到响应要求 Turnstile，等待浏览器完成后续验证")
+    expect(progress).toContain("检测到 RunAnytime 站点，直接执行 PoW 签到协议")
   })
 
   it("normalizes browser-session check-in headers so they do not expose HeadlessChrome", () => {

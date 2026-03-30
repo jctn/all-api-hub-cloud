@@ -873,6 +873,25 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       })
     }
 
+    if (this.isRunAnytimeSite(account)) {
+      const directPowResult = await this.performRunAnytimePowCheckin(
+        page,
+        account,
+        options,
+      )
+      if (
+        directPowResult.status === CheckinResultStatus.Success ||
+        directPowResult.status === CheckinResultStatus.AlreadyChecked
+      ) {
+        return directPowResult
+      }
+
+      await this.reportProgress(
+        options,
+        `RunAnytime PoW 直连未成功，回退到页面按钮流：${directPowResult.message}`,
+      )
+    }
+
     await this.reportProgress(options, "使用浏览器上下文点击签到按钮")
 
     try {
@@ -1054,6 +1073,311 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         status: CheckinResultStatus.Failed,
         code: "network_error",
         message: message || "浏览器会话请求失败",
+        rawMessage: message || undefined,
+        startedAt,
+        completedAt: Date.now(),
+        checkInUrl,
+      }
+    }
+  }
+
+  private async performRunAnytimePowCheckin(
+    page: Page,
+    account: SiteAccount,
+    options: SessionRefreshOptions,
+  ): Promise<CheckinAccountResult> {
+    const startedAt = Date.now()
+    const checkInUrl = joinUrl(account.site_url, resolveCheckInPath(account.site_type))
+
+    await this.reportProgress(options, "检测到 RunAnytime 站点，直接执行 PoW 签到协议")
+
+    try {
+      const browserResult = await page.evaluate(
+        async ({ fallbackUserId }: { fallbackUserId: string }) => {
+          const resolvedUserId =
+            fallbackUserId ||
+            document.body?.innerText.match(/ID:\\s*(\\d+)/u)?.[1] ||
+            ""
+
+          const headers = {
+            accept: "application/json, text/plain, */*",
+            "cache-control": "no-store",
+            "new-api-user": resolvedUserId,
+          }
+
+          const parseJson = async (response: Response) => {
+            const rawText = await response.text()
+            let payload: Record<string, unknown> | null = null
+            try {
+              payload = JSON.parse(rawText) as Record<string, unknown>
+            } catch {
+              payload = null
+            }
+
+            return {
+              statusCode: response.status,
+              rawText,
+              payload,
+            }
+          }
+
+          const challengeResponse = await fetch(
+            "/api/user/pow/challenge?action=checkin",
+            {
+              method: "GET",
+              credentials: "include",
+              headers,
+            },
+          )
+          const challenge = await parseJson(challengeResponse)
+
+          if (
+            !challenge.payload?.success ||
+            !challenge.payload?.data ||
+            typeof challenge.payload.data !== "object"
+          ) {
+            return {
+              challenge,
+              checkin: null,
+              solved: null,
+            }
+          }
+
+          const challengeData = challenge.payload.data as Record<string, unknown>
+          const challengeId =
+            typeof challengeData.challenge_id === "string"
+              ? challengeData.challenge_id
+              : ""
+          const prefix =
+            typeof challengeData.prefix === "string" ? challengeData.prefix : ""
+          const difficulty =
+            typeof challengeData.difficulty === "number"
+              ? challengeData.difficulty
+              : Number(challengeData.difficulty)
+
+          if (!challengeId || !prefix || !Number.isFinite(difficulty)) {
+            return {
+              challenge,
+              checkin: null,
+              solved: null,
+            }
+          }
+
+          const solved = await new Promise<{ nonce: string; attempts: number }>(
+            (resolve, reject) => {
+              const workerSource = `
+                function meetsDifficulty(bytes, difficulty) {
+                  if (difficulty <= 0) return true;
+                  const fullBytes = Math.floor(difficulty / 8);
+                  const remainingBits = difficulty % 8;
+                  for (let i = 0; i < fullBytes && i < bytes.length; i += 1) {
+                    if (bytes[i] !== 0) return false;
+                  }
+                  if (remainingBits > 0 && fullBytes < bytes.length) {
+                    const mask = 255 << (8 - remainingBits);
+                    if (bytes[fullBytes] & mask) return false;
+                  }
+                  return true;
+                }
+                function formatNonce(value) {
+                  return value.toString(16).padStart(8, "0");
+                }
+                self.onmessage = async function(event) {
+                  const { prefix, difficulty } = event.data;
+                  let attempt = 0;
+                  try {
+                    for (;;) {
+                      const nonce = formatNonce(attempt);
+                      const bytes = new TextEncoder().encode(prefix + nonce);
+                      const hashBuffer = await crypto.subtle.digest("SHA-256", bytes);
+                      const hash = new Uint8Array(hashBuffer);
+                      if (meetsDifficulty(hash, difficulty)) {
+                        self.postMessage({ type: "solved", nonce, attempts: attempt + 1 });
+                        return;
+                      }
+                      attempt += 1;
+                      if (attempt > 4294967295) {
+                        self.postMessage({ type: "error", message: "Max attempts reached" });
+                        return;
+                      }
+                    }
+                  } catch (error) {
+                    self.postMessage({
+                      type: "error",
+                      message: error && typeof error === "object" && "message" in error
+                        ? String(error.message)
+                        : String(error),
+                    });
+                  }
+                };
+              `
+
+              const blob = new Blob([workerSource], { type: "text/javascript" })
+              const worker = new Worker(URL.createObjectURL(blob))
+
+              worker.onmessage = (event: MessageEvent) => {
+                const data = event.data as
+                  | { type: "solved"; nonce: string; attempts: number }
+                  | { type: "error"; message?: string }
+                worker.terminate()
+
+                if (data.type === "solved") {
+                  resolve({ nonce: data.nonce, attempts: data.attempts })
+                  return
+                }
+
+                reject(new Error(data.message || "PoW calculation failed"))
+              }
+
+              worker.onerror = (event: ErrorEvent) => {
+                worker.terminate()
+                reject(new Error(event.message || "PoW worker failed"))
+              }
+
+              worker.postMessage({ prefix, difficulty })
+            },
+          )
+
+          const url = new URL("/api/user/checkin", location.origin)
+          url.searchParams.set("pow_challenge", challengeId)
+          url.searchParams.set("pow_nonce", solved.nonce)
+
+          const checkinResponse = await fetch(url.toString(), {
+            method: "POST",
+            credentials: "include",
+            headers,
+          })
+
+          return {
+            challenge,
+            solved,
+            checkin: await parseJson(checkinResponse),
+          }
+        },
+        {
+          fallbackUserId:
+            account.account_info.id > 0 ? String(account.account_info.id) : "",
+        },
+      )
+
+      const checkinResponse = browserResult.checkin
+      if (!checkinResponse) {
+        const challengeMessage = resolvePayloadMessage(
+          browserResult.challenge?.payload ?? null,
+          browserResult.challenge?.rawText ?? "",
+        )
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.Failed,
+          code: "browser_pow_challenge_failed",
+          message: challengeMessage || "RunAnytime PoW 挑战初始化失败",
+          rawMessage: browserResult.challenge?.rawText || undefined,
+          startedAt,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      const payload = checkinResponse.payload
+      const message = resolvePayloadMessage(payload, checkinResponse.rawText)
+      const isSuccess = payload?.success === true
+
+      if (isSuccess) {
+        const reward = resolveRewardFromData(payload?.data)
+        const fullMessage =
+          reward && !message.includes(reward)
+            ? `${message || "签到成功"}，${reward}；已通过浏览器会话补签`
+            : `${message || "签到成功"}；已通过浏览器会话补签`
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.Success,
+          message: fullMessage,
+          rawMessage: message || undefined,
+          startedAt,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      if (this.isAlreadyCheckedMessage(message)) {
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.AlreadyChecked,
+          message: `${message || "今天已经签到"}；已通过浏览器会话校验`,
+          rawMessage: message || undefined,
+          startedAt,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      if (
+        this.isManualActionRequiredMessage(message) ||
+        checkinResponse.rawText.toLowerCase().includes("cloudflare")
+      ) {
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.ManualActionRequired,
+          code: "turnstile_required",
+          message: message || "需要人工完成验证后重试",
+          rawMessage: message || checkinResponse.rawText || undefined,
+          startedAt,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      if (checkinResponse.statusCode === 401 || checkinResponse.statusCode === 403) {
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.Failed,
+          code: "auth_invalid",
+          message: message || "认证失效，请重新登录",
+          rawMessage: message || checkinResponse.rawText || undefined,
+          startedAt,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      return {
+        accountId: account.id,
+        siteName: account.site_name,
+        siteUrl: account.site_url,
+        siteType: account.site_type,
+        status: CheckinResultStatus.Failed,
+        code: "checkin_failed",
+        message: message || `签到失败，HTTP ${checkinResponse.statusCode}`,
+        rawMessage: message || checkinResponse.rawText || undefined,
+        startedAt,
+        completedAt: Date.now(),
+        checkInUrl,
+      }
+    } catch (error) {
+      const message = describeError(error)
+      return {
+        accountId: account.id,
+        siteName: account.site_name,
+        siteUrl: account.site_url,
+        siteType: account.site_type,
+        status: CheckinResultStatus.Failed,
+        code: "browser_pow_checkin_failed",
+        message: message || "RunAnytime PoW 签到失败",
         rawMessage: message || undefined,
         startedAt,
         completedAt: Date.now(),
