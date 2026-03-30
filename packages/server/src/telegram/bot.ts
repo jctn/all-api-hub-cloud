@@ -21,6 +21,34 @@ import {
 import { runSingleAccountCheckinWithAuthFallback } from "./accountActions.js"
 import { splitTelegramMessage } from "./messageChunks.js"
 
+const TELEGRAM_COMMANDS = [
+  { command: "help", description: "显示帮助" },
+  { command: "accounts", description: "查看账号列表" },
+  { command: "status", description: "查看系统状态" },
+  { command: "version", description: "查看版本信息" },
+  { command: "sync_import", description: "同步导入账号" },
+  { command: "checkin_all", description: "批量签到全部账号" },
+  { command: "checkin", description: "单账号签到" },
+  { command: "auth_refresh", description: "刷新账号会话" },
+  { command: "disable", description: "禁用账号" },
+  { command: "enable", description: "启用账号" },
+] as const
+
+const TELEGRAM_HELP_LINES = [
+  "All API Hub 指令列表：",
+  "",
+  "/help — 显示本帮助",
+  "/accounts — 查看账号列表",
+  "/status — 查看系统状态与任务信息",
+  "/version — 查看版本与部署信息",
+  "/sync_import — 从 GitHub 仓库同步导入账号",
+  "/checkin_all — 批量签到全部可签到账号",
+  "/checkin <accountId|siteName> — 单账号签到",
+  "/auth_refresh <accountId|siteName|all> [-log] — 刷新账号会话（-log 输出详细日志）",
+  "/disable <accountId|siteName> — 禁用账号（不再签到和刷新）",
+  "/enable <accountId|siteName> — 启用账号",
+] as const
+
 export async function createTelegramBot(params: {
   config: ServerConfig
   repository: StorageRepository
@@ -150,23 +178,7 @@ export async function createTelegramBot(params: {
 
   bot.command("help", async (ctx) => {
     const chatId = ctx.chat?.id
-    await sendText(
-      chatId,
-      [
-        "All API Hub 指令列表：",
-        "",
-        "/help — 显示本帮助",
-        "/accounts — 查看账号列表",
-        "/status — 查看系统状态与任务信息",
-        "/version — 查看版本与部署信息",
-        "/sync_import — 从 GitHub 仓库同步导入账号",
-        "/checkin_all — 批量签到全部可签到账号",
-        "/checkin <accountId|siteName> — 单账号签到",
-        "/auth_refresh <accountId|siteName|all> [-log] — 刷新账号会话（-log 输出详细日志）",
-        "/disable <accountId|siteName> — 禁用账号（不再签到和刷新）",
-        "/enable <accountId|siteName> — 启用账号",
-      ].join("\n"),
-    )
+    await sendText(chatId, TELEGRAM_HELP_LINES.join("\n"))
   })
 
   bot.command("sync_import", async (ctx) => {
@@ -327,6 +339,19 @@ export async function createTelegramBot(params: {
 
   if (!params.botInfo) {
     await bot.init()
+    const adminChatId = Number(params.config.telegram.adminChatId)
+    if (Number.isSafeInteger(adminChatId)) {
+      try {
+        await bot.api.setMyCommands(TELEGRAM_COMMANDS, {
+          scope: {
+            type: "chat",
+            chat_id: adminChatId,
+          },
+        })
+      } catch (error) {
+        params.logger.error(error, "Telegram bot command registration failed")
+      }
+    }
   }
 
   return bot
