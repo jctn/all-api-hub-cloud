@@ -7,6 +7,27 @@ import {
 import { buildCompatUserIdHeaders } from "../utils/compatHeaders.js"
 
 const QUOTA_PER_USD = 500_000
+const HTML_TITLE_PATTERN = /<title[^>]*>([^<]+)<\/title>/iu
+const HTML_DOCTYPE_PATTERN = /^\s*<!doctype\s+html/iu
+
+export function looksLikeHtmlDocument(rawText: string): boolean {
+  const normalized = rawText.trim().toLowerCase()
+  if (!normalized) {
+    return false
+  }
+
+  return (
+    HTML_DOCTYPE_PATTERN.test(rawText) ||
+    normalized.startsWith("<html") ||
+    (normalized.includes("<html") && normalized.includes("</html>")) ||
+    (normalized.includes("<head") && normalized.includes("<body"))
+  )
+}
+
+export function extractHtmlTitle(rawText: string): string {
+  const match = rawText.match(HTML_TITLE_PATTERN)
+  return match?.[1]?.replace(/\s+/gu, " ").trim() ?? ""
+}
 
 export function normalizeMessage(message: unknown): string {
   return typeof message === "string" ? message : ""

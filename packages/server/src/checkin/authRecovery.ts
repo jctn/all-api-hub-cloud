@@ -3,6 +3,7 @@ import { CheckinResultStatus, type CheckinAccountResult } from "@all-api-hub/cor
 export type CheckinAuthRecoveryType =
   | "auth_invalid"
   | "missing_auth"
+  | "html_interstitial"
   | "manual_action_required"
   | "unsupported_auto_reauth"
   | "not_auth_related"
@@ -24,6 +25,15 @@ export function classifyCheckinResultForReauth(
     return hasLoginProfile
       ? { type: "auth_invalid", retryable: true }
       : { type: "unsupported_auto_reauth", retryable: false }
+  }
+
+  if (
+    result.status === CheckinResultStatus.Failed &&
+    result.code === "html_interstitial"
+  ) {
+    return hasLoginProfile
+      ? { type: "html_interstitial", retryable: true }
+      : { type: "not_auth_related", retryable: false }
   }
 
   if (

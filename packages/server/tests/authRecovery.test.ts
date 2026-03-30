@@ -35,6 +35,18 @@ describe("classifyCheckinResultForReauth", () => {
     })
   })
 
+  it("classifies html interstitial as retryable when profile exists", () => {
+    expect(
+      classifyCheckinResultForReauth(
+        makeResult(CheckinResultStatus.Failed, "html_interstitial"),
+        true,
+      ),
+    ).toEqual({
+      type: "html_interstitial",
+      retryable: true,
+    })
+  })
+
   it("classifies missing auth without profile as unsupported auto reauth", () => {
     expect(
       classifyCheckinResultForReauth(

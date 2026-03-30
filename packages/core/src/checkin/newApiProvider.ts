@@ -10,6 +10,8 @@ import { joinUrl, normalizeBaseUrl } from "../utils/url.js"
 import {
   buildAccountHeaders,
   describeError,
+  extractHtmlTitle,
+  looksLikeHtmlDocument,
   normalizeMessage,
   parseJsonResponse,
   resolvePayloadMessage,
@@ -35,9 +37,26 @@ function isManualActionRequired(message: string): boolean {
     normalized.includes("turnstile") ||
     normalized.includes("cloudflare") ||
     normalized.includes("captcha") ||
+    normalized.includes("attention required") ||
+    normalized.includes("just a moment") ||
+    normalized.includes("checking your browser") ||
     normalized.includes("校验") ||
     normalized.includes("验证")
   )
+}
+
+function buildHtmlInterceptionMessage(rawText: string): string {
+  const title = extractHtmlTitle(rawText)
+
+  if (isManualActionRequired(rawText)) {
+    return title
+      ? `站点返回验证页（${title}），需要人工处理`
+      : "站点返回验证页，需要人工处理"
+  }
+
+  return title
+    ? `站点临时返回 HTML 中间页（${title}）`
+    : "站点临时返回 HTML 中间页"
 }
 
 function buildBaseResult(
@@ -189,6 +208,7 @@ export async function runNewApiCheckin(params: {
     const payload = parsed.payload
     const success = payload?.success === true
     const message = resolvePayloadMessage(payload, parsed.rawText)
+    const htmlResponse = looksLikeHtmlDocument(parsed.rawText)
 
     if (success) {
       const rewardFromData = resolveRewardFromData(payload?.data)
@@ -213,6 +233,44 @@ export async function runNewApiCheckin(params: {
         message,
         completedAt: Date.now(),
         rawMessage: message,
+        checkInUrl,
+      }
+    }
+
+    if (htmlResponse) {
+      const htmlMessage = buildHtmlInterceptionMessage(parsed.rawText)
+
+      if (isManualActionRequired(parsed.rawText)) {
+        return {
+          ...buildBaseResult(account, startedAt),
+          status: CheckinResultStatus.ManualActionRequired,
+          code: "turnstile_required",
+          message: htmlMessage,
+          rawMessage: parsed.rawText || undefined,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      if (parsed.statusCode === 401 || parsed.statusCode === 403) {
+        return {
+          ...buildBaseResult(account, startedAt),
+          status: CheckinResultStatus.Failed,
+          code: "auth_invalid",
+          message: "站点返回未登录页面，请重新登录",
+          rawMessage: parsed.rawText || undefined,
+          completedAt: Date.now(),
+          checkInUrl,
+        }
+      }
+
+      return {
+        ...buildBaseResult(account, startedAt),
+        status: CheckinResultStatus.Failed,
+        code: "html_interstitial",
+        message: htmlMessage,
+        rawMessage: parsed.rawText || undefined,
+        completedAt: Date.now(),
         checkInUrl,
       }
     }

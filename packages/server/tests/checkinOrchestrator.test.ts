@@ -143,6 +143,66 @@ describe("CheckinOrchestrator", () => {
     expect(requests).toContain("Bearer fresh-token")
   })
 
+  it("retries once when the site temporarily returns an HTML interstitial", async () => {
+    const repository = await createRepositoryWithAccounts([baseAccount])
+    let requestCount = 0
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {
+          "demo.example.com": {
+            hostname: "demo.example.com",
+            loginPath: "/login",
+            loginButtonSelectors: ["button.login"],
+            successUrlPatterns: ["/console"],
+            tokenStorageKeys: ["access_token"],
+            postLoginSelectors: [".avatar"],
+          },
+        },
+      },
+      {
+        async refreshSiteSession(): Promise<SessionRefreshResult> {
+          return {
+            status: "failed",
+            message: "should not refresh when transient retry succeeds first",
+          }
+        },
+      },
+      async () => {
+        requestCount += 1
+        if (requestCount === 1) {
+          return new Response(
+            "<!DOCTYPE html><html><head><title>Gateway Error</title></head><body>temporary upstream html</body></html>",
+            {
+              status: 200,
+              headers: {
+                "content-type": "text/html; charset=utf-8",
+              },
+            },
+          )
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: "签到成功",
+          }),
+          { status: 200 },
+        )
+      },
+    )
+
+    const result = await orchestrator.runCheckinBatch({
+      mode: "scheduled",
+    })
+
+    expect(requestCount).toBeGreaterThanOrEqual(2)
+    expect(result.record.summary.success).toBe(1)
+    expect(result.record.results[0].status).toBe(CheckinResultStatus.Success)
+    expect(result.record.results[0].message).toContain("自动重试成功")
+  })
+
   it("refreshes scheduled accounts even when they were synced recently", async () => {
     const recentAccount: SiteAccount = {
       ...baseAccount,

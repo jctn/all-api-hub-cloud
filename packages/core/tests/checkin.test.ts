@@ -136,6 +136,28 @@ describe("runNewApiCheckin", () => {
     expect(result.code).toBe("turnstile_required")
   })
 
+  it("classifies generic HTML interstitial responses without leaking the full document", async () => {
+    const result = await runNewApiCheckin({
+      account: baseAccount,
+      fetchImpl: async () =>
+        new Response(
+          "<!DOCTYPE html><html><head><title>Gateway Error</title></head><body>temporary upstream html</body></html>",
+          {
+            status: 200,
+            headers: {
+              "content-type": "text/html; charset=utf-8",
+            },
+          },
+        ),
+    })
+
+    expect(result.status).toBe(CheckinResultStatus.Failed)
+    expect(result.code).toBe("html_interstitial")
+    expect(result.message).toBe("站点临时返回 HTML 中间页（Gateway Error）")
+    expect(result.message).not.toContain("<!DOCTYPE html>")
+    expect(result.rawMessage).toContain("<!DOCTYPE html>")
+  })
+
   it("recognizes auth invalid responses", async () => {
     const result = await runNewApiCheckin({
       account: baseAccount,

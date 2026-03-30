@@ -58,6 +58,8 @@ export interface SessionRefreshRunOptions {
   onProgress?: (message: string) => Promise<void> | void
 }
 
+const TRANSIENT_HTML_RETRY_DELAY_MS = 1500
+
 function buildRefreshFailureResult(
   account: SiteAccount,
   refreshResult: SessionRefreshResult,
@@ -110,6 +112,33 @@ function isRunAnytimeTurnstileFallbackCandidate(
   }
 }
 
+function isTransientHtmlRetryCandidate(result: CheckinAccountResult): boolean {
+  return (
+    result.status === CheckinResultStatus.Failed &&
+    result.code === "html_interstitial"
+  )
+}
+
+function annotateTransientRetrySuccess(
+  result: CheckinAccountResult,
+): CheckinAccountResult {
+  if (
+    result.status !== CheckinResultStatus.Success &&
+    result.status !== CheckinResultStatus.AlreadyChecked
+  ) {
+    return result
+  }
+
+  if (!result.message || result.message.includes("已自动重试成功")) {
+    return result
+  }
+
+  return {
+    ...result,
+    message: `${result.message}；已在临时中间页后自动重试成功`,
+  }
+}
+
 export class CheckinOrchestrator {
   constructor(
     private readonly repository: StorageRepository,
@@ -136,6 +165,22 @@ export class CheckinOrchestrator {
         mode: options.mode,
         fetchImpl: this.fetchImpl,
       })
+
+      if (isTransientHtmlRetryCandidate(result)) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, TRANSIENT_HTML_RETRY_DELAY_MS),
+        )
+        const latestAccount =
+          (await this.repository.getAccountById(account.id)) ?? account
+        result = annotateTransientRetrySuccess(
+          await executeCheckinAccount({
+            repository: this.repository,
+            account: latestAccount,
+            mode: "manual",
+            fetchImpl: this.fetchImpl,
+          }),
+        )
+      }
 
       if (isRunAnytimeTurnstileFallbackCandidate(account, options, result)) {
         const browserSessionResult =
