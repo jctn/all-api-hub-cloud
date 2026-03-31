@@ -445,7 +445,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   > {
     const targetHost = new URL(account.site_url).hostname.toLowerCase()
     const linuxdoHost = new URL(this.config.github.linuxdoBaseUrl).hostname.toLowerCase()
-    const deadline = Date.now() + 120_000
+    let deadline = Date.now() + 120_000
     const visitedUrls = new Set<string>()
     const loggedSelectorDiagnostics = new Set<string>()
     const actionCooldowns = new Map<string, number>()
@@ -558,6 +558,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             options,
             "检测到 Linux.do 认证失败页，返回站点登录页重新发起 SSO",
           )
+          deadline = Date.now() + 120_000
+          visitedUrls.clear()
+          loggedSelectorDiagnostics.clear()
+          actionCooldowns.clear()
           await flowPage.goto(joinUrl(account.site_url, profile.loginPath), {
             waitUntil: "domcontentloaded",
             timeout: 60_000,
