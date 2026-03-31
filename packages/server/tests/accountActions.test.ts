@@ -97,7 +97,9 @@ describe("runSingleAccountCheckinWithAuthFallback", () => {
       accountId: "acc-1",
       mode: "manual",
     })
-    expect(refreshSessions).toHaveBeenCalledWith("acc-1")
+    expect(refreshSessions).toHaveBeenCalledWith("acc-1", {
+      onProgress: undefined,
+    })
     expect(runCheckinBatch).toHaveBeenNthCalledWith(2, {
       accountId: "acc-1",
       mode: "manual",

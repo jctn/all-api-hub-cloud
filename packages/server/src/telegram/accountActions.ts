@@ -15,10 +15,14 @@ function isAuthInvalidFailure(result: CheckinAccountResult | undefined): boolean
 export async function runSingleAccountCheckinWithAuthFallback(
   account: Pick<{ id: string; site_name: string }, "id" | "site_name">,
   orchestrator: Pick<CheckinOrchestrator, "runCheckinBatch" | "refreshSessions">,
+  options: {
+    onProgress?: (message: string) => Promise<void> | void
+  } = {},
 ): Promise<BatchCheckinRunResult> {
   const firstRun = await orchestrator.runCheckinBatch({
     accountId: account.id,
     mode: "manual",
+    onProgress: options.onProgress,
   })
   const firstResult = firstRun.record.results[0]
 
@@ -26,12 +30,15 @@ export async function runSingleAccountCheckinWithAuthFallback(
     return firstRun
   }
 
-  const refreshRun = await orchestrator.refreshSessions(account.id)
+  const refreshRun = await orchestrator.refreshSessions(account.id, {
+    onProgress: options.onProgress,
+  })
   const refreshResult = refreshRun.results[0]
   if (refreshResult?.status === "refreshed") {
     const retryRun = await orchestrator.runCheckinBatch({
       accountId: account.id,
       mode: "manual",
+      onProgress: options.onProgress,
     })
     const retryResult = retryRun.record.results[0]
     if (retryResult?.status === CheckinResultStatus.Success) {

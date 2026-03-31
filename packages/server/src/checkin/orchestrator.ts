@@ -27,6 +27,7 @@ import { classifyCheckinResultForReauth } from "./authRecovery.js"
 export interface BatchCheckinRunOptions {
   accountId?: string
   mode: "scheduled" | "manual"
+  onProgress?: (message: string) => Promise<void> | void
 }
 
 export interface BatchCheckinRunResult {
@@ -154,7 +155,11 @@ export class CheckinOrchestrator {
     const refreshedAccountIds: string[] = []
     const startedAt = Date.now()
 
-    for (const account of selectedAccounts) {
+    for (const [index, account] of selectedAccounts.entries()) {
+      await options.onProgress?.(
+        `签到进度 (${index + 1}/${selectedAccounts.length})：${account.site_name} (${account.id})`,
+      )
+
       let result = await executeCheckinAccount({
         repository: this.repository,
         account,
@@ -163,6 +168,9 @@ export class CheckinOrchestrator {
       })
 
       if (isTransientHtmlRetryCandidate(result)) {
+        await options.onProgress?.(
+          `[${account.site_name}] 检测到站点临时返回 HTML 中间页，等待后自动重试`,
+        )
         await new Promise((resolve) =>
           setTimeout(resolve, TRANSIENT_HTML_RETRY_DELAY_MS),
         )
@@ -179,8 +187,14 @@ export class CheckinOrchestrator {
       }
 
       if (isRunAnytimeTurnstileFallbackCandidate(account, options, result)) {
+        await options.onProgress?.(
+          `[${account.site_name}] 检测到 Turnstile token 为空，切换到浏览器会话补签`,
+        )
         const browserSessionResult =
-          await this.sessionRefresher.checkInWithBrowserSession?.(account)
+          await this.sessionRefresher.checkInWithBrowserSession?.(account, {
+            onProgress: (message) =>
+              options.onProgress?.(`[${account.site_name}] ${message}`),
+          })
         if (browserSessionResult) {
           results.push(browserSessionResult)
           continue
@@ -193,7 +207,13 @@ export class CheckinOrchestrator {
       const classification = classifyCheckinResultForReauth(result, hasProfile)
 
       if (classification.retryable) {
-        const refreshResult = await this.sessionRefresher.refreshSiteSession(account)
+        await options.onProgress?.(
+          `[${account.site_name}] 检测到可恢复失败（${classification.type}），尝试刷新会话`,
+        )
+        const refreshResult = await this.sessionRefresher.refreshSiteSession(account, {
+          onProgress: (message) =>
+            options.onProgress?.(`[${account.site_name}] ${message}`),
+        })
 
         if (refreshResult.status === "refreshed") {
           refreshedAccountIds.push(account.id)

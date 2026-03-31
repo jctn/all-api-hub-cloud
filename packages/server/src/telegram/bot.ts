@@ -43,7 +43,7 @@ const TELEGRAM_HELP_LINES = [
   "/version — 查看版本与部署信息",
   "/sync_import — 从 GitHub 仓库同步导入账号",
   "/checkin_all — 批量签到全部可签到账号",
-  "/checkin <accountId|siteName> — 单账号签到",
+  "/checkin <accountId|siteName> [-log] — 单账号签到（-log 输出详细日志）",
   "/auth_refresh <accountId|siteName|all> [-log] — 刷新账号会话（-log 输出详细日志）",
   "/disable <accountId|siteName> — 禁用账号（不再签到和刷新）",
   "/enable <accountId|siteName> — 启用账号",
@@ -210,10 +210,13 @@ export async function createTelegramBot(params: {
 
   bot.command("checkin", async (ctx) => {
     const chatId = ctx.chat?.id
+    const input = ctx.match.trim()
+    const verbose = input.includes("-log")
+    const cleanInput = input.replace(/-log/gi, "").trim()
     const resolution = await handleAccountResolution(
       chatId,
-      ctx.match.trim(),
-      "用法：/checkin <accountId|siteName>",
+      cleanInput,
+      "用法：/checkin <accountId|siteName> [-log]",
     )
     if (resolution.status !== "resolved") {
       return
@@ -224,7 +227,10 @@ export async function createTelegramBot(params: {
       `单账号签到任务(${account.site_name})`,
       "checkin_one",
       `执行单账号签到: ${account.site_name} (${account.id})`,
-      () => runSingleAccountCheckinWithAuthFallback(account, params.orchestrator),
+      () =>
+        runSingleAccountCheckinWithAuthFallback(account, params.orchestrator, {
+          onProgress: verbose ? (text) => sendText(chatId, text) : undefined,
+        }),
       (result) => formatCheckinMessage(result, params.config.timeZone),
       (text) => sendText(chatId, text),
     )
