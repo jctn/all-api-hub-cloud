@@ -98,7 +98,12 @@ function isRunAnytimeTurnstileFallbackCandidate(
   options: BatchCheckinRunOptions,
   result: CheckinAccountResult,
 ): boolean {
-  if (!result.message.includes("Turnstile token 为空")) {
+  if (
+    !result.message.includes("Turnstile token 为空") &&
+    result.code !== "auth_invalid" &&
+    result.code !== "missing_auth" &&
+    result.code !== "missing_cookie_auth"
+  ) {
     return false
   }
 
@@ -188,7 +193,7 @@ export class CheckinOrchestrator {
 
       if (isRunAnytimeTurnstileFallbackCandidate(account, options, result)) {
         await options.onProgress?.(
-          `[${account.site_name}] 检测到 Turnstile token 为空，切换到浏览器会话补签`,
+          `[${account.site_name}] 检测到 RunAnytime 会话异常，切换到浏览器会话补签`,
         )
         const browserSessionResult =
           await this.sessionRefresher.checkInWithBrowserSession?.(account, {

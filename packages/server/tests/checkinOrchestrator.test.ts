@@ -427,6 +427,77 @@ describe("CheckinOrchestrator", () => {
     expect(result.record.results[0].message).toContain("浏览器会话补签")
   })
 
+  it("uses a browser-session fallback for manual runanytime check-ins when the API returns auth_invalid", async () => {
+    const runAnytimeAccount: SiteAccount = {
+      ...baseAccount,
+      site_name: "随时跑路公益站",
+      site_url: "https://runanytime.hxi.me",
+      site_type: "new-api",
+    }
+    const repository = await createRepositoryWithAccounts([runAnytimeAccount])
+    let browserFallbackCalls = 0
+    let refreshCalls = 0
+
+    const refresher: SiteSessionRefresher = {
+      async refreshSiteSession(): Promise<SessionRefreshResult> {
+        refreshCalls += 1
+        return {
+          status: "failed",
+          message: "should not refresh before browser fallback on auth_invalid",
+        }
+      },
+      async checkInWithBrowserSession(): Promise<CheckinAccountResult> {
+        browserFallbackCalls += 1
+        const now = Date.now()
+        return {
+          accountId: runAnytimeAccount.id,
+          siteName: runAnytimeAccount.site_name,
+          siteUrl: runAnytimeAccount.site_url,
+          siteType: runAnytimeAccount.site_type,
+          status: CheckinResultStatus.Success,
+          message: "签到成功；已通过浏览器会话补签",
+          startedAt: now,
+          completedAt: now,
+        }
+      },
+    }
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {
+          "runanytime.hxi.me": {
+            hostname: "runanytime.hxi.me",
+            loginPath: "/login",
+            loginButtonSelectors: ["text=使用 LinuxDO 继续"],
+            successUrlPatterns: ["/console"],
+            tokenStorageKeys: ["access_token"],
+            postLoginSelectors: [],
+          },
+        },
+      },
+      refresher,
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: "无权进行此操作",
+          }),
+          { status: 401 },
+        ),
+    )
+
+    const result = await orchestrator.runCheckinBatch({
+      accountId: runAnytimeAccount.id,
+      mode: "manual",
+    })
+
+    expect(browserFallbackCalls).toBe(1)
+    expect(refreshCalls).toBe(0)
+    expect(result.record.summary.success).toBe(1)
+    expect(result.record.results[0].message).toContain("浏览器会话补签")
+  })
+
   it("uses the same browser-session fallback for scheduled runanytime batch check-ins", async () => {
     const runAnytimeAccount: SiteAccount = {
       ...baseAccount,
