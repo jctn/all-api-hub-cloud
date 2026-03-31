@@ -20,6 +20,7 @@ import {
 } from "./accountReference.js"
 import { runSingleAccountCheckinWithAuthFallback } from "./accountActions.js"
 import { splitTelegramMessage } from "./messageChunks.js"
+import { createTaskVerboseLog } from "./taskLog.js"
 
 const TELEGRAM_COMMANDS = [
   { command: "help", description: "显示帮助" },
@@ -222,6 +223,27 @@ export async function createTelegramBot(params: {
       return
     }
     const account = resolution.account
+    const verboseLog = verbose
+      ? await createTaskVerboseLog({
+          diagnosticsDirectory: params.config.diagnosticsDirectory,
+          timeZone: params.config.timeZone,
+          kind: "checkin-one",
+          label: account.site_name,
+        })
+      : null
+    const progressReporter = verbose
+      ? async (text: string) => {
+          await verboseLog?.append(text)
+          await sendText(chatId, text)
+        }
+      : undefined
+
+    if (verboseLog) {
+      await sendText(chatId, `详细日志文件：${verboseLog.filePath}`)
+      await verboseLog.append(
+        `开始执行单账号签到：${account.site_name} (${account.id})`,
+      )
+    }
 
     await startTask(
       `单账号签到任务(${account.site_name})`,
@@ -229,9 +251,13 @@ export async function createTelegramBot(params: {
       `执行单账号签到: ${account.site_name} (${account.id})`,
       () =>
         runSingleAccountCheckinWithAuthFallback(account, params.orchestrator, {
-          onProgress: verbose ? (text) => sendText(chatId, text) : undefined,
+          onProgress: progressReporter,
         }),
-      (result) => formatCheckinMessage(result, params.config.timeZone),
+      (result) => {
+        const message = formatCheckinMessage(result, params.config.timeZone)
+        void verboseLog?.append(message)
+        return verboseLog ? `${message}\n日志文件：${verboseLog.filePath}` : message
+      },
       (text) => sendText(chatId, text),
     )
   })
