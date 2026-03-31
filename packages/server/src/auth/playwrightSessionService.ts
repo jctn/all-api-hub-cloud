@@ -61,7 +61,11 @@ const GITHUB_SUBMIT_SELECTORS = [
 const GITHUB_AUTHORIZE_SELECTORS = [
   "button[name='authorize']",
   "input[name='authorize']",
-  "button[type='submit']",
+  "button:has-text('Authorize')",
+  "button:has-text('Allow')",
+  "button:has-text('授权')",
+  "input[type='submit'][value*='Authorize']",
+  "input[type='submit'][value*='Allow']",
 ]
 const AUTH_SELF_VALIDATION_ATTEMPTS = 5
 const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
@@ -478,6 +482,17 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         this.isSameOrSubdomain(currentHost, linuxdoHost) &&
         this.getUrlPathname(currentUrl).includes("/auth/failure")
       ) {
+        if (currentUrl.toLowerCase().includes("message=access_denied")) {
+          await this.reportProgress(
+            options,
+            "检测到 Linux.do 返回 access_denied，停止自动重试，避免授权页死循环",
+          )
+          return {
+            status: "manual_action_required",
+            message: "GitHub 授权被拒绝或授权页按钮未正确命中，请人工确认后重试",
+          }
+        }
+
         await this.reportProgress(
           options,
           "检测到 Linux.do 认证失败页，返回站点登录页重新发起 SSO",
