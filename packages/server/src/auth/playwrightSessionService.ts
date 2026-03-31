@@ -277,6 +277,49 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       )
       page = context.pages()[0] ?? (await context.newPage())
 
+      if (this.isRunAnytimeSite(account)) {
+        const injectedCookieCount = await this.seedBrowserContextWithAccountCookies(
+          context,
+          account,
+          options,
+        )
+        if (injectedCookieCount > 0) {
+          await this.reportProgress(
+            options,
+            `RunAnytime 先复用账号已有站点会话 cookie（${injectedCookieCount} 个）`,
+          )
+          await page.goto(joinUrl(account.site_url, resolveCheckInPath(account.site_type)), {
+            waitUntil: "domcontentloaded",
+            timeout: 90_000,
+          })
+
+          const directResult = await this.performBrowserSessionCheckin(
+            page,
+            account,
+            profile,
+            options,
+          )
+          if (
+            directResult.status === CheckinResultStatus.Success ||
+            directResult.status === CheckinResultStatus.AlreadyChecked
+          ) {
+            return directResult
+          }
+
+          if (
+            directResult.code !== "auth_invalid" &&
+            directResult.code !== "browser_pow_challenge_failed"
+          ) {
+            return directResult
+          }
+
+          await this.reportProgress(
+            options,
+            `RunAnytime 站点会话直连失败，继续尝试完整 SSO：${directResult.message}`,
+          )
+        }
+      }
+
       await page.goto(joinUrl(account.site_url, profile.loginPath), {
         waitUntil: "domcontentloaded",
         timeout: 90_000,
@@ -339,6 +382,55 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     } finally {
       await context?.close()
     }
+  }
+
+  private async seedBrowserContextWithAccountCookies(
+    context: BrowserContext,
+    account: SiteAccount,
+    options: SessionRefreshOptions,
+  ): Promise<number> {
+    const cookieHeader = normalizeCookieHeaderValue(
+      account.cookieAuth?.sessionCookie || "",
+    )
+    if (!cookieHeader) {
+      return 0
+    }
+
+    const targetUrl = normalizeBaseUrl(account.site_url)
+    const secure = targetUrl.startsWith("https://")
+    const cookies = cookieHeader
+      .split(";")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const separatorIndex = entry.indexOf("=")
+        if (separatorIndex <= 0) {
+          return null
+        }
+
+        const name = entry.slice(0, separatorIndex).trim()
+        const value = entry.slice(separatorIndex + 1).trim()
+        if (!name || !value) {
+          return null
+        }
+
+        return {
+          name,
+          value,
+          url: targetUrl,
+          path: "/",
+          secure,
+        }
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+
+    if (cookies.length === 0) {
+      return 0
+    }
+
+    await this.reportProgress(options, `注入 ${cookies.length} 个账号会话 cookie`)
+    await context.addCookies(cookies)
+    return cookies.length
   }
 
   private async completeLoginFlow(

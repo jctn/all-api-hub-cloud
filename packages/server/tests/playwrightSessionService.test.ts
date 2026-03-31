@@ -1146,6 +1146,58 @@ describe("PlaywrightSiteSessionService", () => {
     expect(headers["accept-language"]).toContain("zh-CN")
   })
 
+  it("injects stored account cookies into the browser context for runanytime reuse", async () => {
+    const progress: string[] = []
+    const addedCookies: Array<Record<string, unknown>> = []
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+    )
+
+    const count = await (service as unknown as {
+      seedBrowserContextWithAccountCookies: (
+        context: {
+          addCookies: (cookies: Array<Record<string, unknown>>) => Promise<void>
+        },
+        account: SiteAccount,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<number>
+    }).seedBrowserContextWithAccountCookies(
+      {
+        async addCookies(cookies) {
+          addedCookies.push(...cookies)
+        },
+      },
+      {
+        ...baseAccount,
+        site_url: "https://runanytime.hxi.me",
+        cookieAuth: {
+          sessionCookie: "session=abc123; cf_clearance=clear456",
+        },
+      },
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(count).toBe(2)
+    expect(addedCookies).toHaveLength(2)
+    expect(addedCookies[0]).toMatchObject({
+      name: "session",
+      value: "abc123",
+      url: "https://runanytime.hxi.me",
+      path: "/",
+      secure: true,
+    })
+    expect(addedCookies[1]).toMatchObject({
+      name: "cf_clearance",
+      value: "clear456",
+    })
+    expect(progress).toContain("注入 2 个账号会话 cookie")
+  })
+
   it("reports storage diagnostics when login succeeds but token extraction still fails", async () => {
     const progress: string[] = []
     const service = new PlaywrightSiteSessionService(
