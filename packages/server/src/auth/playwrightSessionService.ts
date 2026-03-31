@@ -418,7 +418,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           name,
           value,
           url: targetUrl,
-          path: "/",
           secure,
         }
       })

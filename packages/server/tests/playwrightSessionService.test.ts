@@ -1188,7 +1188,6 @@ describe("PlaywrightSiteSessionService", () => {
       name: "session",
       value: "abc123",
       url: "https://runanytime.hxi.me",
-      path: "/",
       secure: true,
     })
     expect(addedCookies[1]).toMatchObject({
