@@ -449,6 +449,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const visitedUrls = new Set<string>()
     const loggedSelectorDiagnostics = new Set<string>()
     const actionCooldowns = new Map<string, number>()
+    const callbackWaits = new Set<string>()
     let flareSolverrAttempts = 0
     const MAX_FLARESOLVERR_ATTEMPTS = 8
 
@@ -471,6 +472,42 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       if (currentUrl && !visitedUrls.has(currentUrl)) {
         visitedUrls.add(currentUrl)
         await this.reportProgress(options, `当前流程页面：${currentPageLabel}`)
+      }
+
+      if (
+        this.isSameOrSubdomain(currentHost, linuxdoHost) &&
+        this.getUrlPathname(currentUrl).includes("/auth/failure")
+      ) {
+        await this.reportProgress(
+          options,
+          "检测到 Linux.do 认证失败页，返回站点登录页重新发起 SSO",
+        )
+        deadline = Date.now() + 120_000
+        visitedUrls.clear()
+        loggedSelectorDiagnostics.clear()
+        actionCooldowns.clear()
+        callbackWaits.clear()
+        flareSolverrAttempts = 0
+        await flowPage.goto(joinUrl(account.site_url, profile.loginPath), {
+          waitUntil: "domcontentloaded",
+          timeout: 60_000,
+        })
+        await flowPage.waitForTimeout(1_000)
+        continue
+      }
+
+      if (
+        this.isSameOrSubdomain(currentHost, linuxdoHost) &&
+        this.getUrlPathname(currentUrl).includes("/auth/github/callback") &&
+        !callbackWaits.has(currentUrl)
+      ) {
+        callbackWaits.add(currentUrl)
+        await this.reportProgress(
+          options,
+          "检测到 Linux.do GitHub callback，先等待页面自行完成回跳",
+        )
+        await flowPage.waitForTimeout(8_000)
+        continue
       }
 
       if (await this.detectCloudflareChallenge(flowPage)) {
@@ -553,24 +590,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       if (this.isSameOrSubdomain(currentHost, linuxdoHost)) {
-        if (this.getUrlPathname(currentUrl).includes("/auth/failure")) {
-          await this.reportProgress(
-            options,
-            "检测到 Linux.do 认证失败页，返回站点登录页重新发起 SSO",
-          )
-          deadline = Date.now() + 120_000
-          visitedUrls.clear()
-          loggedSelectorDiagnostics.clear()
-          actionCooldowns.clear()
-          flareSolverrAttempts = 0
-          await flowPage.goto(joinUrl(account.site_url, profile.loginPath), {
-            waitUntil: "domcontentloaded",
-            timeout: 60_000,
-          })
-          await flowPage.waitForTimeout(1_000)
-          continue
-        }
-
         await this.dismissCommonOverlays(flowPage)
         if (await this.clickFirstVisible(flowPage, LINUXDO_AUTHORIZE_SELECTORS)) {
           await this.reportProgress(options, "检测到 Linux.do Connect 授权页，点击允许")
