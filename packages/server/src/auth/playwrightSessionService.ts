@@ -553,6 +553,19 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       if (this.isSameOrSubdomain(currentHost, linuxdoHost)) {
+        if (this.getUrlPathname(currentUrl).includes("/auth/failure")) {
+          await this.reportProgress(
+            options,
+            "检测到 Linux.do 认证失败页，返回站点登录页重新发起 SSO",
+          )
+          await flowPage.goto(joinUrl(account.site_url, profile.loginPath), {
+            waitUntil: "domcontentloaded",
+            timeout: 60_000,
+          })
+          await flowPage.waitForTimeout(1_000)
+          continue
+        }
+
         await this.dismissCommonOverlays(flowPage)
         if (await this.clickFirstVisible(flowPage, LINUXDO_AUTHORIZE_SELECTORS)) {
           await this.reportProgress(options, "检测到 Linux.do Connect 授权页，点击允许")
