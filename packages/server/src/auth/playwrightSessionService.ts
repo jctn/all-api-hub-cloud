@@ -510,6 +510,29 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         continue
       }
 
+      if (
+        this.isSameOrSubdomain(currentHost, linuxdoHost) &&
+        this.getUrlPathname(currentUrl).includes("/auth/github/callback") &&
+        callbackWaits.has(currentUrl)
+      ) {
+        await this.reportProgress(
+          options,
+          "Linux.do GitHub callback 仍停留在质询页，返回站点登录页重新发起 SSO",
+        )
+        deadline = Date.now() + 120_000
+        visitedUrls.clear()
+        loggedSelectorDiagnostics.clear()
+        actionCooldowns.clear()
+        callbackWaits.clear()
+        flareSolverrAttempts = 0
+        await flowPage.goto(joinUrl(account.site_url, profile.loginPath), {
+          waitUntil: "domcontentloaded",
+          timeout: 60_000,
+        })
+        await flowPage.waitForTimeout(1_000)
+        continue
+      }
+
       if (await this.detectCloudflareChallenge(flowPage)) {
         if (flareSolverrAttempts < MAX_FLARESOLVERR_ATTEMPTS && this.config.flareSolverrUrl) {
           flareSolverrAttempts++
