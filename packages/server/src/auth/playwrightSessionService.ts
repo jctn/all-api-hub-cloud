@@ -448,6 +448,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const deadline = Date.now() + 120_000
     const visitedUrls = new Set<string>()
     const loggedSelectorDiagnostics = new Set<string>()
+    const actionCooldowns = new Map<string, number>()
     let flareSolverrAttempts = 0
     const MAX_FLARESOLVERR_ATTEMPTS = 8
 
@@ -558,14 +559,22 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           await flowPage.waitForLoadState("domcontentloaded").catch(() => undefined)
           continue
         }
+        const linuxdoGitHubActionKey = `${currentUrl}::linuxdo-github`
         if (
+          this.canAttemptFlowAction(actionCooldowns, linuxdoGitHubActionKey) &&
           await this.clickFirstVisibleWithPopup(
             context,
             flowPage,
             LINUXDO_GITHUB_SELECTORS,
           )
         ) {
+          this.markFlowActionAttempt(
+            actionCooldowns,
+            linuxdoGitHubActionKey,
+            8_000,
+          )
           await this.reportProgress(options, "检测到 Linux.do 授权页，点击 GitHub 登录入口")
+          await this.waitForFlowTransition(flowPage, currentUrl, 8_000)
           continue
         }
 
@@ -609,6 +618,35 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       status: "manual_action_required",
       message: "登录流程超时，未能完成 Linux.do / GitHub SSO",
     }
+  }
+
+  private canAttemptFlowAction(
+    actionCooldowns: Map<string, number>,
+    actionKey: string,
+  ): boolean {
+    const notBefore = actionCooldowns.get(actionKey) ?? 0
+    return Date.now() >= notBefore
+  }
+
+  private markFlowActionAttempt(
+    actionCooldowns: Map<string, number>,
+    actionKey: string,
+    cooldownMs: number,
+  ): void {
+    actionCooldowns.set(actionKey, Date.now() + cooldownMs)
+  }
+
+  private async waitForFlowTransition(
+    page: Page,
+    currentUrl: string,
+    timeoutMs: number,
+  ): Promise<void> {
+    await page
+      .waitForURL((url) => url.toString() !== currentUrl, {
+        timeout: timeoutMs,
+        waitUntil: "domcontentloaded",
+      })
+      .catch(() => undefined)
   }
 
   private async captureAuthenticatedAccount(
