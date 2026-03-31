@@ -965,22 +965,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     if (this.isRunAnytimeSite(account)) {
-      const directPowResult = await this.performRunAnytimePowCheckin(
-        page,
-        account,
-        options,
-      )
-      if (
-        directPowResult.status === CheckinResultStatus.Success ||
-        directPowResult.status === CheckinResultStatus.AlreadyChecked
-      ) {
-        return directPowResult
-      }
-
-      await this.reportProgress(
-        options,
-        `RunAnytime PoW 直连未成功，回退到页面按钮流：${directPowResult.message}`,
-      )
+      return await this.performRunAnytimePowCheckin(page, account, options)
     }
 
     await this.reportProgress(options, "使用浏览器上下文点击签到按钮")
