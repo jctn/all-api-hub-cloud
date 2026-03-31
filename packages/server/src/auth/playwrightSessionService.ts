@@ -562,6 +562,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           visitedUrls.clear()
           loggedSelectorDiagnostics.clear()
           actionCooldowns.clear()
+          flareSolverrAttempts = 0
           await flowPage.goto(joinUrl(account.site_url, profile.loginPath), {
             waitUntil: "domcontentloaded",
             timeout: 60_000,
