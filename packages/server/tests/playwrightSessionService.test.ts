@@ -1214,6 +1214,62 @@ describe("PlaywrightSiteSessionService", () => {
     expect(progress).toContain("检测到 RunAnytime PoW 首次响应要求 Turnstile，尝试等待页面验证结果")
   })
 
+  it("renders a runanytime turnstile widget in-page when no token field is present yet", async () => {
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async () => {
+        throw new Error("unexpected node fetch call")
+      },
+    )
+
+    const page = {
+      async evaluate(fn: unknown, arg?: unknown) {
+        if (Array.isArray(arg)) {
+          return ""
+        }
+
+        const source = String(fn)
+        if (!source.includes("turnstile.render")) {
+          return null
+        }
+
+        return {
+          statusCode: 200,
+          rawText: JSON.stringify({
+            success: true,
+            message: "签到成功",
+            data: {
+              quota_awarded: 6660000,
+            },
+          }),
+          requestUrl:
+            "https://runanytime.hxi.me/api/user/checkin?turnstile=cf-token&pow_challenge=abc&pow_nonce=00000001",
+        }
+      },
+    }
+
+    const response = await (service as unknown as {
+      performRunAnytimeTurnstileFollowup: (
+        page: typeof page,
+        account: SiteAccount,
+        requestUrl: string,
+      ) => Promise<{ statusCode: number; rawText: string; requestUrl: string } | null>
+    }).performRunAnytimeTurnstileFollowup(
+      page,
+      {
+        ...baseAccount,
+        site_name: "随时跑路公益站",
+        site_url: "https://runanytime.hxi.me",
+      },
+      "https://runanytime.hxi.me/api/user/checkin?pow_challenge=abc&pow_nonce=00000001",
+    )
+
+    expect(response?.statusCode).toBe(200)
+    expect(response?.rawText).toContain("签到成功")
+    expect(response?.requestUrl).toContain("turnstile=cf-token")
+  })
+
   it("falls back to a page-level runanytime handler when Playwright locators are unavailable", async () => {
     const progress: string[] = []
     const service = new PlaywrightSiteSessionService(

@@ -1940,6 +1940,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           fallbackUserId: string
           fallbackAccessToken: string
         }) => {
+          const sleep = (ms: number) =>
+            new Promise((resolve) => {
+              setTimeout(resolve, ms)
+            })
+
           const waitForTurnstileToken = async (): Promise<string> => {
             const startedAt = Date.now()
             while (Date.now() - startedAt < 30_000) {
@@ -1950,12 +1955,161 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               if (token) {
                 return token
               }
-              await new Promise((resolve) => setTimeout(resolve, 1_000))
+              await sleep(1_000)
             }
             return ""
           }
 
-          const turnstileToken = await waitForTurnstileToken()
+          const inferSiteKey = (): string => {
+            const selectorCandidates = [
+              '[data-sitekey]',
+              '[data-turnstile-site-key]',
+              '[data-site-key]',
+            ]
+
+            for (const selector of selectorCandidates) {
+              const element = document.querySelector(selector) as HTMLElement | null
+              const value =
+                element?.getAttribute("data-sitekey") ||
+                element?.getAttribute("data-turnstile-site-key") ||
+                element?.getAttribute("data-site-key") ||
+                ""
+              if (value.trim()) {
+                return value.trim()
+              }
+            }
+
+            const scriptTexts = Array.from(document.scripts)
+              .map((script) => script.textContent || "")
+              .join("\n")
+            const scriptMatch = scriptTexts.match(
+              /turnstile(?:_|-)?site(?:_|-)?key["'\s:=]+([0-9A-Za-z_-]{10,})/iu,
+            )
+            if (scriptMatch?.[1]) {
+              return scriptMatch[1].trim()
+            }
+
+            const storageCandidates = [
+              localStorage.getItem("status") || "",
+              localStorage.getItem("site_status") || "",
+              sessionStorage.getItem("status") || "",
+            ]
+            for (const entry of storageCandidates) {
+              if (!entry) continue
+              try {
+                const parsed = JSON.parse(entry) as Record<string, unknown>
+                const value =
+                  typeof parsed.turnstile_site_key === "string"
+                    ? parsed.turnstile_site_key
+                    : typeof parsed.turnstileSiteKey === "string"
+                      ? parsed.turnstileSiteKey
+                      : ""
+                if (value.trim()) {
+                  return value.trim()
+                }
+              } catch {
+                continue
+              }
+            }
+
+            return ""
+          }
+
+          const obtainTokenViaRenderedWidget = async (): Promise<string> => {
+            const turnstile = (window as Window & {
+              turnstile?: {
+                render?: (
+                  container: HTMLElement | string,
+                  options: Record<string, unknown>,
+                ) => string | number | undefined
+                execute?: (widgetId?: string | number) => Promise<unknown> | unknown
+                remove?: (widgetId?: string | number) => void
+              }
+            }).turnstile
+
+            if (!turnstile?.render) {
+              return ""
+            }
+
+            const siteKey = inferSiteKey()
+            if (!siteKey) {
+              return ""
+            }
+
+            const existingContainer = document.getElementById(
+              "__all_api_hub_runanytime_turnstile",
+            )
+            const container =
+              existingContainer ||
+              Object.assign(document.createElement("div"), {
+                id: "__all_api_hub_runanytime_turnstile",
+              })
+
+            if (!existingContainer) {
+              container.setAttribute(
+                "style",
+                "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;",
+              )
+              document.body.appendChild(container)
+            }
+
+            return await new Promise<string>((resolve) => {
+              let settled = false
+              const finish = (token = "") => {
+                if (settled) return
+                settled = true
+                resolve(token)
+              }
+
+              try {
+                const widgetId = turnstile.render(container, {
+                  sitekey: siteKey,
+                  size: "invisible",
+                  callback: (token: unknown) => {
+                    finish(typeof token === "string" ? token : "")
+                  },
+                  "error-callback": () => finish(""),
+                  "expired-callback": () => finish(""),
+                  "timeout-callback": () => finish(""),
+                })
+
+                try {
+                  const executeResult = turnstile.execute?.(widgetId)
+                  if (
+                    executeResult &&
+                    typeof (executeResult as PromiseLike<unknown>).then === "function"
+                  ) {
+                    void (executeResult as PromiseLike<unknown>).then(
+                      () => undefined,
+                      () => finish(""),
+                    )
+                  }
+                } catch {
+                  finish("")
+                }
+              } catch {
+                finish("")
+              }
+
+              void (async () => {
+                const startedAt = Date.now()
+                while (Date.now() - startedAt < 30_000) {
+                  const token = await waitForTurnstileToken()
+                  if (token) {
+                    finish(token)
+                    return
+                  }
+                  await sleep(500)
+                }
+                finish("")
+              })()
+            })
+          }
+
+          let turnstileToken = await waitForTurnstileToken()
+          if (!turnstileToken) {
+            turnstileToken = await obtainTokenViaRenderedWidget()
+          }
           if (!turnstileToken) {
             return null
           }
