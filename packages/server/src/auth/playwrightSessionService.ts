@@ -69,6 +69,8 @@ const GITHUB_AUTHORIZE_SELECTORS = [
 ]
 const AUTH_SELF_VALIDATION_ATTEMPTS = 5
 const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
+const LINUXDO_CALLBACK_WAIT_MS = 20_000
+const MAX_LINUXDO_SSO_RESTARTS = 1
 const COOKIE_ONLY_REFRESH_HOSTS = new Set(["api.ouu.ch", "kfc-api.sxxe.net"])
 const OUU_SIGNATURE_ATTEMPTS = 5
 const OUU_SIGNATURE_RETRY_DELAY_MS = 1_000
@@ -454,6 +456,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const loggedSelectorDiagnostics = new Set<string>()
     const actionCooldowns = new Map<string, number>()
     const callbackWaits = new Set<string>()
+    let linuxdoSsoRestartAttempts = 0
     let flareSolverrAttempts = 0
     const MAX_FLARESOLVERR_ATTEMPTS = 8
 
@@ -493,9 +496,23 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           }
         }
 
+        if (linuxdoSsoRestartAttempts >= MAX_LINUXDO_SSO_RESTARTS) {
+          const failureReason =
+            new URL(currentUrl).searchParams.get("message") || "unknown"
+          await this.reportProgress(
+            options,
+            `Linux.do 认证失败已连续重试 ${linuxdoSsoRestartAttempts} 次，停止自动重试；原因=${failureReason}`,
+          )
+          return {
+            status: "manual_action_required",
+            message: `Linux.do 登录连续失败（${failureReason}），已停止自动重试`,
+          }
+        }
+
+        linuxdoSsoRestartAttempts += 1
         await this.reportProgress(
           options,
-          "检测到 Linux.do 认证失败页，返回站点登录页重新发起 SSO",
+          `检测到 Linux.do 认证失败页，返回站点登录页重新发起 SSO（第 ${linuxdoSsoRestartAttempts} 次）`,
         )
         deadline = Date.now() + 120_000
         visitedUrls.clear()
@@ -519,9 +536,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         callbackWaits.add(currentUrl)
         await this.reportProgress(
           options,
-          "检测到 Linux.do GitHub callback，先等待页面自行完成回跳",
+          `检测到 Linux.do GitHub callback，先等待页面自行完成回跳（最多 ${LINUXDO_CALLBACK_WAIT_MS / 1000} 秒）`,
         )
-        await flowPage.waitForTimeout(8_000)
+        await this.waitForFlowTransition(
+          flowPage,
+          currentUrl,
+          LINUXDO_CALLBACK_WAIT_MS,
+        )
         continue
       }
 
@@ -530,9 +551,21 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         this.getUrlPathname(currentUrl).includes("/auth/github/callback") &&
         callbackWaits.has(currentUrl)
       ) {
+        if (linuxdoSsoRestartAttempts >= MAX_LINUXDO_SSO_RESTARTS) {
+          await this.reportProgress(
+            options,
+            `Linux.do GitHub callback 已连续重试 ${linuxdoSsoRestartAttempts} 次，停止自动重试`,
+          )
+          return {
+            status: "manual_action_required",
+            message: "Linux.do GitHub callback 持续停留在质询页，已停止自动重试",
+          }
+        }
+
+        linuxdoSsoRestartAttempts += 1
         await this.reportProgress(
           options,
-          "Linux.do GitHub callback 仍停留在质询页，返回站点登录页重新发起 SSO",
+          `Linux.do GitHub callback 仍停留在质询页，返回站点登录页重新发起 SSO（第 ${linuxdoSsoRestartAttempts} 次）`,
         )
         deadline = Date.now() + 120_000
         visitedUrls.clear()
