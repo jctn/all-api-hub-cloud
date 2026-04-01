@@ -73,7 +73,11 @@ const RUN_ANYTIME_LINUXDO_CALLBACK_WAIT_MS = 60_000
 const LINUXDO_SSO_DEADLINE_EXTENSION_MS = 120_000
 const LINUXDO_CALLBACK_WAIT_MS = 20_000
 const MAX_LINUXDO_SSO_RESTARTS = 1
-const COOKIE_ONLY_REFRESH_HOSTS = new Set(["api.ouu.ch", "kfc-api.sxxe.net"])
+const COOKIE_ONLY_REFRESH_HOSTS = new Set([
+  "api.ouu.ch",
+  "kfc-api.sxxe.net",
+  "runanytime.hxi.me",
+])
 const OUU_SIGNATURE_ATTEMPTS = 5
 const OUU_SIGNATURE_RETRY_DELAY_MS = 1_000
 
@@ -300,30 +304,30 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             waitUntil: "domcontentloaded",
             timeout: 90_000,
           })
-
-          const directResult = await this.performBrowserSessionCheckin(
+          const capturedAccount = await this.captureAuthenticatedAccount(
             page,
+            context,
             account,
             profile,
             options,
           )
-          if (
-            directResult.status === CheckinResultStatus.Success ||
-            directResult.status === CheckinResultStatus.AlreadyChecked
-          ) {
-            return directResult
-          }
-
-          if (
-            directResult.code !== "auth_invalid" &&
-            directResult.code !== "browser_pow_challenge_failed"
-          ) {
-            return directResult
+          if (capturedAccount) {
+            await this.repository.saveAccount(capturedAccount)
+            await this.reportProgress(
+              options,
+              "RunAnytime 站点会话校验成功，切换为页面按钮签到流",
+            )
+            return await this.performBrowserSessionCheckin(
+              page,
+              capturedAccount,
+              profile,
+              options,
+            )
           }
 
           await this.reportProgress(
             options,
-            `RunAnytime 站点会话直连失败，继续尝试完整 SSO：${directResult.message}`,
+            "RunAnytime 站点会话直连未通过 /api/user/self 校验，继续尝试完整 SSO",
           )
         }
       }
@@ -359,9 +363,28 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         }
       }
 
+      let effectiveAccount = account
+      if (this.isRunAnytimeSite(account)) {
+        const capturedAccount = await this.captureAuthenticatedAccount(
+          flowResult.page,
+          context,
+          account,
+          profile,
+          options,
+        )
+        if (capturedAccount) {
+          effectiveAccount = capturedAccount
+          await this.repository.saveAccount(capturedAccount)
+          await this.reportProgress(
+            options,
+            "RunAnytime 完整 SSO 后已同步站点会话，切换为页面按钮签到流",
+          )
+        }
+      }
+
       return await this.performBrowserSessionCheckin(
         flowResult.page,
-        account,
+        effectiveAccount,
         profile,
         options,
       )
@@ -1191,15 +1214,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       })
-    }
-
-    if (this.isRunAnytimeSite(account)) {
-      return await this.performRunAnytimePowCheckin(
-        page,
-        account,
-        profile,
-        options,
-      )
     }
 
     await this.reportProgress(options, "使用浏览器上下文点击签到按钮")
