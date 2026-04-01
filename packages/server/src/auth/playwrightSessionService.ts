@@ -2015,6 +2015,47 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             return ""
           }
 
+          const ensureStatusConfig = async (): Promise<void> => {
+            const currentStatus =
+              localStorage.getItem("status") ||
+              sessionStorage.getItem("status") ||
+              ""
+            if (currentStatus) {
+              try {
+                const parsed = JSON.parse(currentStatus) as Record<string, unknown>
+                if (
+                  typeof parsed.turnstile_site_key === "string" &&
+                  parsed.turnstile_site_key.trim()
+                ) {
+                  return
+                }
+              } catch {
+                // Ignore malformed cached status and attempt a fresh fetch below.
+              }
+            }
+
+            try {
+              const response = await fetch("/api/status", {
+                method: "GET",
+                credentials: "include",
+                headers: {
+                  accept: "application/json, text/plain, */*",
+                  "cache-control": "no-store",
+                },
+              })
+              const rawText = await response.text()
+              const payload = JSON.parse(rawText) as {
+                success?: boolean
+                data?: Record<string, unknown>
+              }
+              if (payload?.success && payload.data && typeof payload.data === "object") {
+                localStorage.setItem("status", JSON.stringify(payload.data))
+              }
+            } catch {
+              // Best effort only. Follow-up rendering will fail naturally if the site key remains unavailable.
+            }
+          }
+
           const obtainTokenViaRenderedWidget = async (): Promise<string> => {
             const ensureTurnstileApi = async (): Promise<
               | {
@@ -2106,6 +2147,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               return ""
             }
 
+            await ensureStatusConfig()
             const siteKey = inferSiteKey()
             if (!siteKey) {
               return ""
