@@ -2212,9 +2212,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             if (!existingContainer) {
               container.setAttribute(
                 "style",
-                "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;",
+                "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2147483647;background:rgba(255,255,255,0.98);padding:16px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.18);min-width:320px;text-align:center;",
               )
               document.body.appendChild(container)
+            } else {
+              container.setAttribute(
+                "style",
+                "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2147483647;background:rgba(255,255,255,0.98);padding:16px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.18);min-width:320px;text-align:center;",
+              )
             }
 
             return await new Promise<string>((resolve) => {
@@ -2230,7 +2235,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                 diagnostics.phase = "rendering_widget"
                 const widgetId = turnstile.render(container, {
                   sitekey: siteKey,
-                  size: "invisible",
                   callback: (token: unknown) => {
                     finish(typeof token === "string" ? token : "")
                   },
@@ -2239,23 +2243,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                   "timeout-callback": () => finish(""),
                 })
 
-                try {
-                  diagnostics.phase = "executing_widget"
-                  const executeResult = turnstile.execute?.(widgetId)
-                  diagnostics.executeCalled = Boolean(turnstile.execute)
-                  if (
-                    executeResult &&
-                    typeof (executeResult as PromiseLike<unknown>).then === "function"
-                  ) {
-                    void (executeResult as PromiseLike<unknown>).then(
-                      () => undefined,
-                      () => finish(""),
-                    )
-                  }
-                } catch {
-                  diagnostics.executeFailed = true
-                  finish("")
-                }
+                diagnostics.phase = "widget_rendered"
+                diagnostics.widgetId = widgetId == null ? "" : String(widgetId)
               } catch {
                 diagnostics.renderFailed = true
                 finish("")
