@@ -1013,7 +1013,7 @@ describe("PlaywrightSiteSessionService", () => {
         if (Array.isArray(arg)) {
           return ""
         }
-        return ""
+        return "Check in now"
       },
       async goto() {
         return undefined
@@ -1140,6 +1140,7 @@ describe("PlaywrightSiteSessionService", () => {
     expect(responseCall).toBeGreaterThanOrEqual(2)
     expect(routeCalls).toBe(0)
     expect(unrouteCalls).toBe(0)
+    expect(progress).toContain("RunAnytime 原生点击签到按钮：Check in now")
     expect(progress).toContain("使用浏览器上下文点击签到按钮")
     expect(progress).toContain("检测到首次签到响应要求 Turnstile，等待浏览器完成后续验证")
   })

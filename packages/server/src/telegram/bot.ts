@@ -111,7 +111,7 @@ export async function createTelegramBot(params: {
     kind: string,
     label: string,
     run: () => Promise<T>,
-    format: (result: T) => string,
+    format: (result: T) => string | Promise<string>,
     reply: (text: string) => Promise<unknown>,
     onError?: (error: unknown) => Promise<void> | void,
   ) => {
@@ -120,7 +120,7 @@ export async function createTelegramBot(params: {
       await replyText(reply, `${replyPrefix}已开始。`)
       void task
         .then(async (result) => {
-          await replyText(reply, format(result))
+          await replyText(reply, await format(result))
         })
         .catch(async (error) => {
           await onError?.(error)
@@ -255,9 +255,9 @@ export async function createTelegramBot(params: {
         runSingleAccountCheckinWithAuthFallback(account, params.orchestrator, {
           onProgress: progressReporter,
         }),
-      (result) => {
+      async (result) => {
         const message = formatCheckinMessage(result, params.config.timeZone)
-        void verboseLog?.append(message)
+        await verboseLog?.append(message)
         return verboseLog ? `${message}\n日志文件：${verboseLog.filePath}` : message
       },
       (text) => sendText(chatId, text),

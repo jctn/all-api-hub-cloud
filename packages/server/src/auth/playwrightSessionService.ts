@@ -1299,12 +1299,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         )
         let clicked = false
         try {
-          clicked = await this.clickFirstVisible(page, [
-            "button:has-text('Check in now')",
-            "button:has-text('check in now')",
-            "button:has-text('Check In Now')",
-            "button:has-text('立即签到')",
-          ])
+          clicked = this.isRunAnytimeSite(account)
+            ? await this.clickRunAnytimeCheckinButton(page, options)
+            : await this.clickFirstVisible(page, [
+                "button:has-text('Check in now')",
+                "button:has-text('check in now')",
+                "button:has-text('Check In Now')",
+                "button:has-text('立即签到')",
+              ])
         } catch (error) {
           await this.reportProgress(
             options,
@@ -1394,12 +1396,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               )
               .catch(() => null)
 
-            const retryClicked = await this.clickFirstVisible(page, [
-              "button:has-text('Check in now')",
-              "button:has-text('check in now')",
-              "button:has-text('Check In Now')",
-              "button:has-text('立即签到')",
-            ])
+            const retryClicked = this.isRunAnytimeSite(account)
+              ? await this.clickRunAnytimeCheckinButton(page, options)
+              : await this.clickFirstVisible(page, [
+                  "button:has-text('Check in now')",
+                  "button:has-text('check in now')",
+                  "button:has-text('Check In Now')",
+                  "button:has-text('立即签到')",
+                ])
             if (retryClicked) {
               followupResponse = await retryResponsePromise
             }
@@ -2612,6 +2616,38 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     return false
+  }
+
+  private async clickRunAnytimeCheckinButton(
+    page: Page,
+    options: SessionRefreshOptions,
+  ): Promise<boolean> {
+    const clickedLabel = await page
+      .evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll("button"))
+        const target = buttons.find((button) => {
+          const text = (button.textContent || "").trim()
+          return /check in now|立即签到/i.test(text)
+        }) as HTMLButtonElement | undefined
+
+        if (!target || target.disabled) {
+          return ""
+        }
+
+        target.click()
+        return (target.textContent || "").trim()
+      })
+      .catch(() => "")
+
+    if (!clickedLabel) {
+      return false
+    }
+
+    await this.reportProgress(
+      options,
+      `RunAnytime 原生点击签到按钮：${clickedLabel}`,
+    )
+    return true
   }
 
   private async clickFirstVisibleWithPopup(
