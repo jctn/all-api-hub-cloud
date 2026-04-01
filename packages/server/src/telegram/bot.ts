@@ -113,6 +113,7 @@ export async function createTelegramBot(params: {
     run: () => Promise<T>,
     format: (result: T) => string,
     reply: (text: string) => Promise<unknown>,
+    onError?: (error: unknown) => Promise<void> | void,
   ) => {
     try {
       const task = params.taskCoordinator.startExclusive(kind, label, run)
@@ -122,6 +123,7 @@ export async function createTelegramBot(params: {
           await replyText(reply, format(result))
         })
         .catch(async (error) => {
+          await onError?.(error)
           await replyText(
             reply,
             `任务失败：${error instanceof Error ? error.message : String(error)}`,
@@ -259,6 +261,10 @@ export async function createTelegramBot(params: {
         return verboseLog ? `${message}\n日志文件：${verboseLog.filePath}` : message
       },
       (text) => sendText(chatId, text),
+      (error) =>
+        verboseLog?.append(
+          `任务失败：${error instanceof Error ? error.message : String(error)}`,
+        ),
     )
   })
 

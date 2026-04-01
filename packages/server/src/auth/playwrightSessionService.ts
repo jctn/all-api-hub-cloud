@@ -2607,7 +2607,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         continue
       }
 
-      await locator.click({ timeout: 5_000 })
+      await locator.click({ timeout: 5_000, noWaitAfter: true })
       return true
     }
 
@@ -2634,7 +2634,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       const popupPromise = context.waitForEvent("page", { timeout: 3_000 }).catch(
         () => null,
       )
-      await locator.click({ timeout: 5_000 })
+      await locator.click({ timeout: 5_000, noWaitAfter: true })
       const popup = await popupPromise
       if (popup) {
         await popup.waitForLoadState("domcontentloaded").catch(() => undefined)
