@@ -1219,6 +1219,39 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     await this.reportProgress(options, "使用浏览器上下文点击签到按钮")
 
     try {
+      const pageState = {
+        pageClosed: false,
+        pageCrashed: false,
+        contextClosed: false,
+      }
+      const pageWithEvents = page as Page & {
+        on?: (event: string, listener: (...args: unknown[]) => void) => unknown
+      }
+      const contextWithEvents = (typeof (page as Page & { context?: () => BrowserContext }).context === "function"
+        ? (page as Page & { context: () => BrowserContext }).context()
+        : null) as (BrowserContext & {
+        on?: (event: string, listener: (...args: unknown[]) => void) => unknown
+      }) | null
+
+      pageWithEvents.on?.("close", () => {
+        pageState.pageClosed = true
+        void this.reportProgress(
+          options,
+          `诊断：页面已关闭；最后 URL=${page.url()}`,
+        )
+      })
+      pageWithEvents.on?.("crash", () => {
+        pageState.pageCrashed = true
+        void this.reportProgress(
+          options,
+          `诊断：页面已崩溃；最后 URL=${page.url()}`,
+        )
+      })
+      contextWithEvents?.on?.("close", () => {
+        pageState.contextClosed = true
+        void this.reportProgress(options, "诊断：浏览器上下文已关闭")
+      })
+
       const shouldNormalizeHeaders = !this.isRunAnytimeSite(account)
       const routePattern = "**/api/user/checkin*"
       if (shouldNormalizeHeaders) {
@@ -1233,6 +1266,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         | { statusCode: number; rawText: string; requestUrl?: string }
         | null = null
       try {
+        await this.reportProgress(
+          options,
+          `准备等待签到请求响应；当前 URL=${page.url()}`,
+        )
         const responsePromise = page.waitForResponse(
           (response) =>
             response.url().startsWith(apiUrl) &&
@@ -1253,6 +1290,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               .catch(() => null)
           : null
 
+        await this.reportProgress(
+          options,
+          `准备点击签到按钮；当前 URL=${page.url()}`,
+        )
         const clicked = await this.clickFirstVisible(page, [
           "button:has-text('Check in now')",
           "button:has-text('check in now')",
@@ -1264,12 +1305,30 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           throw new Error("未找到签到按钮")
         }
 
-        const response = await responsePromise
+        await this.reportProgress(
+          options,
+          `签到按钮点击完成；当前 URL=${page.url()}`,
+        )
+
+        let response
+        try {
+          response = await responsePromise
+        } catch (error) {
+          await this.reportProgress(
+            options,
+            `等待首个签到响应异常：${describeError(error)}；pageClosed=${pageState.pageClosed} pageCrashed=${pageState.pageCrashed} contextClosed=${pageState.contextClosed} 当前URL=${page.url()}`,
+          )
+          throw error
+        }
         browserResponse = {
           statusCode: response.status(),
           rawText: await response.text().catch(() => ""),
           requestUrl: response.url(),
         }
+        await this.reportProgress(
+          options,
+          `已捕获首个签到响应：${browserResponse.requestUrl || "<unknown>"}；HTTP ${browserResponse.statusCode}`,
+        )
 
         const firstPayload = this.tryParseJsonRecord(browserResponse.rawText)
         const firstMessage = resolvePayloadMessage(firstPayload, browserResponse.rawText)
