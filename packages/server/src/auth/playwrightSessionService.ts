@@ -2665,9 +2665,94 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         continue
       }
 
-      const clickedLabel = await locator
+      const clickResult = await locator
         .evaluate((element) => {
           const button = element as HTMLElement
+          const text = (button.textContent || "").trim()
+
+          const createSyntheticEvent = () => ({
+            type: "click",
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            defaultPrevented: false,
+            currentTarget: button,
+            target: button,
+            nativeEvent: new MouseEvent("click", {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+            }),
+            preventDefault() {
+              this.defaultPrevented = true
+            },
+            stopPropagation() {},
+            isDefaultPrevented() {
+              return this.defaultPrevented
+            },
+            isPropagationStopped() {
+              return false
+            },
+            persist() {},
+          })
+
+          const findReactOnClick = (
+            node: HTMLElement | null,
+          ): ((event: unknown) => unknown) | null => {
+            let current = node as (HTMLElement & Record<string, unknown>) | null
+            while (current) {
+              for (const key of Object.keys(current)) {
+                if (key.startsWith("__reactProps$")) {
+                  const props = current[key] as Record<string, unknown> | undefined
+                  if (props && typeof props.onClick === "function") {
+                    return props.onClick as (event: unknown) => unknown
+                  }
+                }
+
+                if (key.startsWith("__reactFiber$")) {
+                  const fiber = current[key] as
+                    | {
+                        memoizedProps?: Record<string, unknown>
+                        return?: {
+                          memoizedProps?: Record<string, unknown>
+                        } | null
+                      }
+                    | undefined
+                  if (fiber?.memoizedProps && typeof fiber.memoizedProps.onClick === "function") {
+                    return fiber.memoizedProps.onClick as (event: unknown) => unknown
+                  }
+                  if (
+                    fiber?.return?.memoizedProps &&
+                    typeof fiber.return.memoizedProps.onClick === "function"
+                  ) {
+                    return fiber.return.memoizedProps.onClick as (event: unknown) => unknown
+                  }
+                }
+              }
+
+              current = current.parentElement as (HTMLElement & Record<string, unknown>) | null
+            }
+
+            return null
+          }
+
+          const reactOnClick = findReactOnClick(button)
+          if (reactOnClick) {
+            const maybePromise = reactOnClick(createSyntheticEvent())
+            if (maybePromise && typeof (maybePromise as PromiseLike<unknown>).then === "function") {
+              void (maybePromise as PromiseLike<unknown>).then(
+                () => undefined,
+                () => undefined,
+              )
+            }
+            return `react:${text}`
+          }
+
+          if (typeof (button as HTMLButtonElement).click === "function") {
+            ;(button as HTMLButtonElement).click()
+            return `native:${text}`
+          }
+
           const eventTypes = [
             "pointerdown",
             "mousedown",
@@ -2686,17 +2771,26 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             )
           }
 
-          return (button.textContent || "").trim()
+          return `dispatch:${text}`
         })
         .catch(() => "")
 
-      if (!clickedLabel) {
+      if (!clickResult) {
         continue
       }
 
+      const [strategy, rawLabel] = clickResult.includes(":")
+        ? clickResult.split(/:(.+)/u)
+        : ["dispatch", clickResult]
+      const clickedLabel = rawLabel || buttonState.text || selector
+
       await this.reportProgress(
         options,
-        `RunAnytime 事件派发点击签到按钮：${clickedLabel}`,
+        strategy === "react"
+          ? `RunAnytime 页面内直接调用签到逻辑：${clickedLabel}`
+          : strategy === "native"
+            ? `RunAnytime 原生 click 触发签到按钮：${clickedLabel}`
+            : `RunAnytime 事件派发点击签到按钮：${clickedLabel}`,
       )
       return true
     }

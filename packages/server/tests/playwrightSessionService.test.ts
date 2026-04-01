@@ -991,7 +991,7 @@ describe("PlaywrightSiteSessionService", () => {
     expect(progress).toContain("使用浏览器上下文点击签到按钮")
   })
 
-  it("uses the runanytime page button flow and waits for the follow-up turnstile response", async () => {
+  it("invokes the runanytime page check-in handler directly and waits for the follow-up turnstile response", async () => {
     const progress: string[] = []
     let routeCalls = 0
     let unrouteCalls = 0
@@ -1106,7 +1106,7 @@ describe("PlaywrightSiteSessionService", () => {
                   }
                 }
 
-                return "Check in now"
+                return "react:Check in now"
               },
             }
           },
@@ -1152,7 +1152,7 @@ describe("PlaywrightSiteSessionService", () => {
     expect(progress).toContain(
       "RunAnytime 按钮状态：text=Check in now disabled=false aria-busy=<empty>",
     )
-    expect(progress).toContain("RunAnytime 事件派发点击签到按钮：Check in now")
+    expect(progress).toContain("RunAnytime 页面内直接调用签到逻辑：Check in now")
     expect(progress).toContain("使用浏览器上下文点击签到按钮")
     expect(progress).toContain("检测到首次签到响应要求 Turnstile，等待浏览器完成后续验证")
   })
