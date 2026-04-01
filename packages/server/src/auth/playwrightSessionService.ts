@@ -1279,12 +1279,64 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             options,
             "检测到首次签到响应要求 Turnstile，等待浏览器完成后续验证",
           )
-          const followupResponse = await runAnytimeFollowupResponsePromise
+          const pageContext =
+            typeof (page as Page & { context?: () => BrowserContext }).context ===
+            "function"
+              ? (page as Page & { context: () => BrowserContext }).context()
+              : null
+
+          if (pageContext && this.config.flareSolverrUrl) {
+            await this.reportProgress(
+              options,
+              "RunAnytime 个人页正在尝试预热 Turnstile 验证状态",
+            )
+            const solved = await this.solveCloudflareWithFlareSolverr(
+              pageContext,
+              page,
+              options,
+            )
+            if (solved) {
+              await page.waitForTimeout(5_000).catch(() => undefined)
+            }
+          }
+
+          let followupResponse = await runAnytimeFollowupResponsePromise
+          if (!followupResponse) {
+            await this.reportProgress(
+              options,
+              "未捕获到 Turnstile 后续请求，尝试再次点击签到按钮",
+            )
+            const retryResponsePromise = page
+              .waitForResponse(
+                (response) =>
+                  response.url().startsWith(apiUrl) &&
+                  response.url().toLowerCase().includes("turnstile=") &&
+                  response.request().method().toUpperCase() === "POST",
+                { timeout: 30_000 },
+              )
+              .catch(() => null)
+
+            const retryClicked = await this.clickFirstVisible(page, [
+              "button:has-text('Check in now')",
+              "button:has-text('check in now')",
+              "button:has-text('Check In Now')",
+              "button:has-text('立即签到')",
+            ])
+            if (retryClicked) {
+              followupResponse = await retryResponsePromise
+            }
+          }
+
           if (followupResponse) {
             browserResponse = {
               statusCode: followupResponse.status(),
               rawText: await followupResponse.text().catch(() => ""),
             }
+          } else {
+            await this.reportProgress(
+              options,
+              "Turnstile 后续请求仍未出现，保留首次响应结果",
+            )
           }
         }
       } finally {
