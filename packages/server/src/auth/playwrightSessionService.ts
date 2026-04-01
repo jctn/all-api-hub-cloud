@@ -2016,17 +2016,92 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           }
 
           const obtainTokenViaRenderedWidget = async (): Promise<string> => {
-            const turnstile = (window as Window & {
-              turnstile?: {
-                render?: (
-                  container: HTMLElement | string,
-                  options: Record<string, unknown>,
-                ) => string | number | undefined
-                execute?: (widgetId?: string | number) => Promise<unknown> | unknown
-                remove?: (widgetId?: string | number) => void
+            const ensureTurnstileApi = async (): Promise<
+              | {
+                  render?: (
+                    container: HTMLElement | string,
+                    options: Record<string, unknown>,
+                  ) => string | number | undefined
+                  execute?: (widgetId?: string | number) => Promise<unknown> | unknown
+                  remove?: (widgetId?: string | number) => void
+                }
+              | undefined
+            > => {
+              const existingTurnstile = (window as Window & {
+                turnstile?: {
+                  render?: (
+                    container: HTMLElement | string,
+                    options: Record<string, unknown>,
+                  ) => string | number | undefined
+                  execute?: (widgetId?: string | number) => Promise<unknown> | unknown
+                  remove?: (widgetId?: string | number) => void
+                }
+              }).turnstile
+              if (existingTurnstile?.render) {
+                return existingTurnstile
               }
-            }).turnstile
 
+              const existingScript = document.querySelector(
+                'script[src*="challenges.cloudflare.com/turnstile/v0/api.js"]',
+              ) as HTMLScriptElement | null
+
+              const script =
+                existingScript ||
+                Object.assign(document.createElement("script"), {
+                  src: "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
+                  async: true,
+                  defer: true,
+                })
+
+              if (!existingScript) {
+                document.head.appendChild(script)
+              }
+
+              const loaded = await new Promise<boolean>((resolve) => {
+                const finish = (ok: boolean) => resolve(ok)
+                if (
+                  (window as Window & { turnstile?: { render?: unknown } }).turnstile?.render
+                ) {
+                  finish(true)
+                  return
+                }
+
+                const timeoutId = window.setTimeout(() => finish(false), 15_000)
+                script.addEventListener(
+                  "load",
+                  () => {
+                    window.clearTimeout(timeoutId)
+                    finish(true)
+                  },
+                  { once: true },
+                )
+                script.addEventListener(
+                  "error",
+                  () => {
+                    window.clearTimeout(timeoutId)
+                    finish(false)
+                  },
+                  { once: true },
+                )
+              })
+
+              if (!loaded) {
+                return undefined
+              }
+
+              return (window as Window & {
+                turnstile?: {
+                  render?: (
+                    container: HTMLElement | string,
+                    options: Record<string, unknown>,
+                  ) => string | number | undefined
+                  execute?: (widgetId?: string | number) => Promise<unknown> | unknown
+                  remove?: (widgetId?: string | number) => void
+                }
+              }).turnstile
+            }
+
+            const turnstile = await ensureTurnstileApi()
             if (!turnstile?.render) {
               return ""
             }
