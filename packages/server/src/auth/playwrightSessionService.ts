@@ -1798,13 +1798,20 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           browserResult.requestUrl,
         )
         if (followupResponse) {
-          checkinResponse = {
-            statusCode: followupResponse.statusCode,
-            rawText: followupResponse.rawText,
-            payload: this.tryParseJsonRecord(followupResponse.rawText),
+          if (followupResponse.statusCode === 0) {
+            await this.reportProgress(
+              options,
+              `RunAnytime Turnstile follow-up 诊断：${followupResponse.rawText || "<empty>"}`,
+            )
+          } else {
+            checkinResponse = {
+              statusCode: followupResponse.statusCode,
+              rawText: followupResponse.rawText,
+              payload: this.tryParseJsonRecord(followupResponse.rawText),
+            }
+            payload = checkinResponse.payload
+            message = resolvePayloadMessage(payload, checkinResponse.rawText)
           }
-          payload = checkinResponse.payload
-          message = resolvePayloadMessage(payload, checkinResponse.rawText)
         } else {
           await this.reportProgress(
             options,
@@ -1919,7 +1926,15 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     page: Page,
     account: SiteAccount,
     requestUrl: string,
-  ): Promise<{ statusCode: number; rawText: string; requestUrl: string } | null> {
+  ): Promise<
+    | {
+        statusCode: number
+        rawText: string
+        requestUrl: string
+        diagnostics?: Record<string, unknown>
+      }
+    | null
+  > {
     const extractedAccessToken = await this.extractAccessToken(page, {
       hostname: "runanytime.hxi.me",
       loginPath: "/login",
@@ -1929,7 +1944,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       postLoginSelectors: [],
     }).catch(() => "")
 
-    return await page
+    const evaluated = await page
       .evaluate(
         async ({
           requestUrl,
@@ -1940,6 +1955,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           fallbackUserId: string
           fallbackAccessToken: string
         }) => {
+          const diagnostics: Record<string, unknown> = {
+            phase: "init",
+          }
+
           const sleep = (ms: number) =>
             new Promise((resolve) => {
               setTimeout(resolve, ms)
@@ -1953,6 +1972,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               ) as HTMLInputElement | HTMLTextAreaElement | null
               const token = tokenField?.value?.trim() || ""
               if (token) {
+                diagnostics.tokenSource = "existing_field"
                 return token
               }
               await sleep(1_000)
@@ -2020,6 +2040,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               localStorage.getItem("status") ||
               sessionStorage.getItem("status") ||
               ""
+            diagnostics.statusFromStorage = Boolean(currentStatus)
             if (currentStatus) {
               try {
                 const parsed = JSON.parse(currentStatus) as Record<string, unknown>
@@ -2027,14 +2048,17 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                   typeof parsed.turnstile_site_key === "string" &&
                   parsed.turnstile_site_key.trim()
                 ) {
+                  diagnostics.statusStorageHasSiteKey = true
                   return
                 }
               } catch {
                 // Ignore malformed cached status and attempt a fresh fetch below.
+                diagnostics.statusStorageMalformed = true
               }
             }
 
             try {
+              diagnostics.statusFetchAttempted = true
               const response = await fetch("/api/status", {
                 method: "GET",
                 credentials: "include",
@@ -2044,15 +2068,21 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                 },
               })
               const rawText = await response.text()
+              diagnostics.statusFetchHttpStatus = response.status
               const payload = JSON.parse(rawText) as {
                 success?: boolean
                 data?: Record<string, unknown>
               }
               if (payload?.success && payload.data && typeof payload.data === "object") {
                 localStorage.setItem("status", JSON.stringify(payload.data))
+                diagnostics.statusFetchStored = true
+                diagnostics.statusFetchHasSiteKey =
+                  typeof payload.data.turnstile_site_key === "string" &&
+                  payload.data.turnstile_site_key.trim().length > 0
               }
             } catch {
               // Best effort only. Follow-up rendering will fail naturally if the site key remains unavailable.
+              diagnostics.statusFetchFailed = true
             }
           }
 
@@ -2079,6 +2109,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                 }
               }).turnstile
               if (existingTurnstile?.render) {
+                diagnostics.turnstileApiSource = "window"
                 return existingTurnstile
               }
 
@@ -2096,6 +2127,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
               if (!existingScript) {
                 document.head.appendChild(script)
+                diagnostics.turnstileScriptInjected = true
+              } else {
+                diagnostics.turnstileScriptInjected = false
               }
 
               const loaded = await new Promise<boolean>((resolve) => {
@@ -2103,6 +2137,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                 if (
                   (window as Window & { turnstile?: { render?: unknown } }).turnstile?.render
                 ) {
+                  diagnostics.turnstileApiAlreadyReady = true
                   finish(true)
                   return
                 }
@@ -2112,6 +2147,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                   "load",
                   () => {
                     window.clearTimeout(timeoutId)
+                    diagnostics.turnstileScriptLoaded = true
                     finish(true)
                   },
                   { once: true },
@@ -2120,6 +2156,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                   "error",
                   () => {
                     window.clearTimeout(timeoutId)
+                    diagnostics.turnstileScriptLoadError = true
                     finish(false)
                   },
                   { once: true },
@@ -2127,6 +2164,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               })
 
               if (!loaded) {
+                diagnostics.turnstileApiUnavailable = true
                 return undefined
               }
 
@@ -2144,12 +2182,21 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
             const turnstile = await ensureTurnstileApi()
             if (!turnstile?.render) {
+              diagnostics.phase = "turnstile_api_missing"
+              diagnostics.hasTurnstileRender = false
+              diagnostics.currentUrl = location.href
+              diagnostics.localStorageKeys = Object.keys(localStorage)
               return ""
             }
+            diagnostics.hasTurnstileRender = true
 
             await ensureStatusConfig()
             const siteKey = inferSiteKey()
+            diagnostics.inferredSiteKeyLength = siteKey.length
             if (!siteKey) {
+              diagnostics.phase = "site_key_missing"
+              diagnostics.currentUrl = location.href
+              diagnostics.localStorageKeys = Object.keys(localStorage)
               return ""
             }
 
@@ -2175,10 +2222,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               const finish = (token = "") => {
                 if (settled) return
                 settled = true
+                diagnostics.finalTokenLength = token.length
                 resolve(token)
               }
 
               try {
+                diagnostics.phase = "rendering_widget"
                 const widgetId = turnstile.render(container, {
                   sitekey: siteKey,
                   size: "invisible",
@@ -2191,7 +2240,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                 })
 
                 try {
+                  diagnostics.phase = "executing_widget"
                   const executeResult = turnstile.execute?.(widgetId)
+                  diagnostics.executeCalled = Boolean(turnstile.execute)
                   if (
                     executeResult &&
                     typeof (executeResult as PromiseLike<unknown>).then === "function"
@@ -2202,9 +2253,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                     )
                   }
                 } catch {
+                  diagnostics.executeFailed = true
                   finish("")
                 }
               } catch {
+                diagnostics.renderFailed = true
                 finish("")
               }
 
@@ -2213,11 +2266,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
                 while (Date.now() - startedAt < 30_000) {
                   const token = await waitForTurnstileToken()
                   if (token) {
+                    diagnostics.phase = "token_obtained"
                     finish(token)
                     return
                   }
                   await sleep(500)
                 }
+                diagnostics.phase = "token_timeout"
                 finish("")
               })()
             })
@@ -2225,10 +2280,16 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
           let turnstileToken = await waitForTurnstileToken()
           if (!turnstileToken) {
+            diagnostics.phase = "render_widget_needed"
             turnstileToken = await obtainTokenViaRenderedWidget()
           }
           if (!turnstileToken) {
-            return null
+            return {
+              statusCode: 0,
+              rawText: "",
+              requestUrl,
+              diagnostics,
+            }
           }
 
           const firstUrl = new URL(requestUrl)
@@ -2267,6 +2328,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             statusCode: response.status,
             rawText: await response.text(),
             requestUrl: secondUrl.toString(),
+            diagnostics,
           }
         },
         {
@@ -2277,6 +2339,29 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         },
       )
       .catch(() => null)
+
+    if (!evaluated) {
+      return null
+    }
+
+    if (evaluated.statusCode === 0) {
+      const parts = Object.entries(evaluated.diagnostics || {})
+        .filter(([, value]) => value !== undefined && value !== null && value !== "")
+        .map(([key, value]) =>
+          `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`,
+        )
+      if (parts.length > 0) {
+        // This path is intentionally noisy: it exists only for targeted RunAnytime debugging.
+        // The caller logs the returned diagnostics summary when follow-up still cannot produce a token.
+        return {
+          ...evaluated,
+          rawText: parts.join(" | "),
+        }
+      }
+      return null
+    }
+
+    return evaluated
   }
 
   private buildBrowserSessionCheckinHeaders(
