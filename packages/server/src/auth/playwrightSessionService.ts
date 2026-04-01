@@ -69,6 +69,7 @@ const GITHUB_AUTHORIZE_SELECTORS = [
 ]
 const AUTH_SELF_VALIDATION_ATTEMPTS = 5
 const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
+const RUN_ANYTIME_LINUXDO_CALLBACK_WAIT_MS = 60_000
 const LINUXDO_CALLBACK_WAIT_MS = 20_000
 const MAX_LINUXDO_SSO_RESTARTS = 1
 const COOKIE_ONLY_REFRESH_HOSTS = new Set(["api.ouu.ch", "kfc-api.sxxe.net"])
@@ -536,12 +537,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         callbackWaits.add(currentUrl)
         await this.reportProgress(
           options,
-          `检测到 Linux.do GitHub callback，先等待页面自行完成回跳（最多 ${LINUXDO_CALLBACK_WAIT_MS / 1000} 秒）`,
+          `检测到 Linux.do GitHub callback，先等待页面自行完成回跳（最多 ${RUN_ANYTIME_LINUXDO_CALLBACK_WAIT_MS / 1000} 秒）`,
         )
         await this.waitForFlowTransition(
           flowPage,
           currentUrl,
-          LINUXDO_CALLBACK_WAIT_MS,
+          RUN_ANYTIME_LINUXDO_CALLBACK_WAIT_MS,
         )
         continue
       }
@@ -551,34 +552,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         this.getUrlPathname(currentUrl).includes("/auth/github/callback") &&
         callbackWaits.has(currentUrl)
       ) {
-        if (linuxdoSsoRestartAttempts >= MAX_LINUXDO_SSO_RESTARTS) {
-          await this.reportProgress(
-            options,
-            `Linux.do GitHub callback 已连续重试 ${linuxdoSsoRestartAttempts} 次，停止自动重试`,
-          )
-          return {
-            status: "manual_action_required",
-            message: "Linux.do GitHub callback 持续停留在质询页，已停止自动重试",
-          }
-        }
-
-        linuxdoSsoRestartAttempts += 1
         await this.reportProgress(
           options,
-          `Linux.do GitHub callback 仍停留在质询页，返回站点登录页重新发起 SSO（第 ${linuxdoSsoRestartAttempts} 次）`,
+          "Linux.do GitHub callback 持续停留在质询页，停止自动重试，避免回调页循环",
         )
-        deadline = Date.now() + 120_000
-        visitedUrls.clear()
-        loggedSelectorDiagnostics.clear()
-        actionCooldowns.clear()
-        callbackWaits.clear()
-        flareSolverrAttempts = 0
-        await flowPage.goto(joinUrl(account.site_url, profile.loginPath), {
-          waitUntil: "domcontentloaded",
-          timeout: 60_000,
-        })
-        await flowPage.waitForTimeout(1_000)
-        continue
+        return {
+          status: "manual_action_required",
+          message: "Linux.do GitHub callback 持续停留在质询页，已停止自动重试",
+        }
       }
 
       if (await this.detectCloudflareChallenge(flowPage)) {
