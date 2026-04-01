@@ -70,6 +70,7 @@ const GITHUB_AUTHORIZE_SELECTORS = [
 const AUTH_SELF_VALIDATION_ATTEMPTS = 5
 const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
 const RUN_ANYTIME_LINUXDO_CALLBACK_WAIT_MS = 60_000
+const LINUXDO_SSO_DEADLINE_EXTENSION_MS = 120_000
 const LINUXDO_CALLBACK_WAIT_MS = 20_000
 const MAX_LINUXDO_SSO_RESTARTS = 1
 const COOKIE_ONLY_REFRESH_HOSTS = new Set(["api.ouu.ch", "kfc-api.sxxe.net"])
@@ -566,6 +567,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         if (flareSolverrAttempts < MAX_FLARESOLVERR_ATTEMPTS && this.config.flareSolverrUrl) {
           flareSolverrAttempts++
           if (await this.solveCloudflareWithFlareSolverr(context, flowPage, options)) {
+            deadline = Math.max(
+              deadline,
+              Date.now() + LINUXDO_SSO_DEADLINE_EXTENSION_MS,
+            )
+            await this.reportProgress(
+              options,
+              `Cloudflare 自动破解成功，延长登录流程等待窗口 ${LINUXDO_SSO_DEADLINE_EXTENSION_MS / 1000} 秒`,
+            )
             await flowPage.waitForTimeout(3_000)
             continue
           }
