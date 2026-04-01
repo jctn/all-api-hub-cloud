@@ -1001,12 +1001,17 @@ describe("PlaywrightSiteSessionService", () => {
       },
       async evaluate(_fn: unknown, arg?: unknown) {
         evaluateCalls += 1
+        if (Array.isArray(arg)) {
+          return "stored-token"
+        }
         if (
           arg &&
           typeof arg === "object" &&
           "fallbackUserId" in arg &&
-          typeof arg.fallbackUserId === "string"
+          typeof arg.fallbackUserId === "string" &&
+          "fallbackAccessToken" in arg
         ) {
+          expect(arg.fallbackAccessToken).toBe("stored-token")
           return {
             challenge: {
               statusCode: 200,
@@ -1195,6 +1200,25 @@ describe("PlaywrightSiteSessionService", () => {
       value: "clear456",
     })
     expect(progress).toContain("注入 2 个账号会话 cookie")
+  })
+
+  it("treats the runanytime login page as ready once the turnstile token is populated", async () => {
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+    )
+
+    const ready = await (service as unknown as {
+      isRunAnytimeLoginReady: (
+        page: { evaluate: (fn: unknown) => Promise<boolean> },
+      ) => Promise<boolean>
+    }).isRunAnytimeLoginReady({
+      async evaluate() {
+        return true
+      },
+    })
+
+    expect(ready).toBe(true)
   })
 
   it("reports storage diagnostics when login succeeds but token extraction still fails", async () => {

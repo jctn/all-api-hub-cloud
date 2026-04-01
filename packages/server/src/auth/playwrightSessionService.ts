@@ -699,6 +699,19 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
       if (currentHost === targetHost) {
         await this.dismissCommonOverlays(flowPage)
+        if (this.isRunAnytimeSite(account) && this.getUrlPathname(currentUrl).includes("/login")) {
+          const ready = await this.prepareRunAnytimeLoginPage(
+            context,
+            flowPage,
+            options,
+          )
+          if (!ready) {
+            return {
+              status: "manual_action_required",
+              message: "RunAnytime 登录页验证未完成，需人工介入",
+            }
+          }
+        }
         if (
           await this.clickFirstVisibleWithPopup(
             context,
@@ -1071,6 +1084,86 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
   }
 
+  private async prepareRunAnytimeLoginPage(
+    context: BrowserContext,
+    page: Page,
+    options: SessionRefreshOptions,
+  ): Promise<boolean> {
+    if (await this.isRunAnytimeLoginReady(page)) {
+      await this.reportProgress(
+        options,
+        "RunAnytime 登录页验证已就绪，准备点击 Continue with LinuxDO",
+      )
+      return true
+    }
+
+    await this.reportProgress(
+      options,
+      "RunAnytime 登录页验证尚未就绪，尝试预热站点验证状态",
+    )
+
+    if (this.config.flareSolverrUrl) {
+      const solved = await this.solveCloudflareWithFlareSolverr(
+        context,
+        page,
+        options,
+      )
+      if (solved) {
+        await page.waitForTimeout(5_000)
+        if (await this.isRunAnytimeLoginReady(page)) {
+          await this.reportProgress(
+            options,
+            "RunAnytime 登录页验证预热完成，准备点击 Continue with LinuxDO",
+          )
+          return true
+        }
+      }
+    }
+
+    await page.waitForTimeout(5_000)
+    if (await this.isRunAnytimeLoginReady(page)) {
+      await this.reportProgress(
+        options,
+        "RunAnytime 登录页验证延迟就绪，准备点击 Continue with LinuxDO",
+      )
+      return true
+    }
+
+    await this.reportProgress(
+      options,
+      "RunAnytime 登录页仍未完成站点验证，暂停自动登录",
+    )
+    return false
+  }
+
+  private async isRunAnytimeLoginReady(page: Page): Promise<boolean> {
+    return await page
+      .evaluate(() => {
+        const turnstileField = document.querySelector(
+          'input[name=\"cf-turnstile-response\"], textarea[name=\"cf-turnstile-response\"]',
+        ) as HTMLInputElement | HTMLTextAreaElement | null
+        const hasLinuxdoButton = Array.from(document.querySelectorAll("button"))
+          .some((button) =>
+            /continue with linuxdo/i.test(button.textContent || ""),
+          )
+        const hasTurnstileFrame = Array.from(document.querySelectorAll("iframe"))
+          .some((frame) =>
+            (frame.getAttribute("src") || "").includes("challenges.cloudflare.com"),
+          )
+
+        if (!hasLinuxdoButton) {
+          return false
+        }
+
+        if (!hasTurnstileFrame) {
+          return true
+        }
+
+        return Boolean(turnstileField?.value?.trim())
+      })
+      .catch(() => false)
+  }
+
   private resolvePostLoginCaptureUrl(account: SiteAccount): string {
     if (this.isCookieOnlyRefreshAllowed(account)) {
       return joinUrl(account.site_url, resolveCheckInPath(account.site_type))
@@ -1111,7 +1204,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     if (this.isRunAnytimeSite(account)) {
-      return await this.performRunAnytimePowCheckin(page, account, options)
+      return await this.performRunAnytimePowCheckin(
+        page,
+        account,
+        profile,
+        options,
+      )
     }
 
     await this.reportProgress(options, "使用浏览器上下文点击签到按钮")
@@ -1306,25 +1404,45 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   private async performRunAnytimePowCheckin(
     page: Page,
     account: SiteAccount,
+    profile: SiteLoginProfile,
     options: SessionRefreshOptions,
   ): Promise<CheckinAccountResult> {
     const startedAt = Date.now()
     const checkInUrl = joinUrl(account.site_url, resolveCheckInPath(account.site_type))
+    const extractedAccessToken = await this.extractAccessToken(page, profile).catch(
+      () => "",
+    )
 
     await this.reportProgress(options, "检测到 RunAnytime 站点，直接执行 PoW 签到协议")
+    await this.reportProgress(
+      options,
+      extractedAccessToken
+        ? "RunAnytime 页面已提取到 access token，优先使用 token + cookie 直签"
+        : "RunAnytime 页面未提取到 access token，先使用 cookie 直签",
+    )
 
     try {
       const browserResult = await page.evaluate(
-        async ({ fallbackUserId }: { fallbackUserId: string }) => {
+        async ({
+          fallbackUserId,
+          fallbackAccessToken,
+        }: {
+          fallbackUserId: string
+          fallbackAccessToken: string
+        }) => {
           const resolvedUserId =
             fallbackUserId ||
             document.body?.innerText.match(/ID:\\s*(\\d+)/u)?.[1] ||
             ""
+          const resolvedAccessToken = fallbackAccessToken.trim()
 
-          const headers = {
+          const headers: Record<string, string> = {
             accept: "application/json, text/plain, */*",
             "cache-control": "no-store",
             "new-api-user": resolvedUserId,
+          }
+          if (resolvedAccessToken) {
+            headers.Authorization = `Bearer ${resolvedAccessToken}`
           }
 
           const parseJson = async (response: Response) => {
@@ -1479,6 +1597,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         {
           fallbackUserId:
             account.account_info.id > 0 ? String(account.account_info.id) : "",
+          fallbackAccessToken: extractedAccessToken,
         },
       )
 
