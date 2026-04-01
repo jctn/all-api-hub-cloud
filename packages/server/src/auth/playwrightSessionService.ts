@@ -2622,32 +2622,86 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     page: Page,
     options: SessionRefreshOptions,
   ): Promise<boolean> {
-    const clickedLabel = await page
-      .evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll("button"))
-        const target = buttons.find((button) => {
-          const text = (button.textContent || "").trim()
-          return /check in now|立即签到/i.test(text)
-        }) as HTMLButtonElement | undefined
+    const selectors = [
+      "button:has-text('Check in now')",
+      "button:has-text('check in now')",
+      "button:has-text('Check In Now')",
+      "button:has-text('立即签到')",
+    ]
 
-        if (!target || target.disabled) {
-          return ""
-        }
+    for (const selector of selectors) {
+      const locator = page.locator(selector).first()
+      const count = await locator.count().catch(() => 0)
+      if (count === 0) {
+        continue
+      }
 
-        target.click()
-        return (target.textContent || "").trim()
-      })
-      .catch(() => "")
+      const visible = await locator.isVisible().catch(() => false)
+      if (!visible) {
+        continue
+      }
 
-    if (!clickedLabel) {
-      return false
+      const buttonState = await locator
+        .evaluate((element) => {
+          const button = element as HTMLButtonElement
+          return {
+            text: (button.textContent || "").trim(),
+            disabled: button.disabled,
+            ariaBusy: button.getAttribute("aria-busy") || "",
+          }
+        })
+        .catch(() => ({
+          text: selector,
+          disabled: false,
+          ariaBusy: "",
+        }))
+
+      await this.reportProgress(
+        options,
+        `RunAnytime 按钮状态：text=${buttonState.text || "<empty>"} disabled=${buttonState.disabled} aria-busy=${buttonState.ariaBusy || "<empty>"}`,
+      )
+
+      if (buttonState.disabled) {
+        continue
+      }
+
+      const clickedLabel = await locator
+        .evaluate((element) => {
+          const button = element as HTMLElement
+          const eventTypes = [
+            "pointerdown",
+            "mousedown",
+            "pointerup",
+            "mouseup",
+            "click",
+          ]
+
+          for (const type of eventTypes) {
+            button.dispatchEvent(
+              new MouseEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+              }),
+            )
+          }
+
+          return (button.textContent || "").trim()
+        })
+        .catch(() => "")
+
+      if (!clickedLabel) {
+        continue
+      }
+
+      await this.reportProgress(
+        options,
+        `RunAnytime 事件派发点击签到按钮：${clickedLabel}`,
+      )
+      return true
     }
 
-    await this.reportProgress(
-      options,
-      `RunAnytime 原生点击签到按钮：${clickedLabel}`,
-    )
-    return true
+    return false
   }
 
   private async clickFirstVisibleWithPopup(

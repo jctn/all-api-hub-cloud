@@ -1096,8 +1096,17 @@ describe("PlaywrightSiteSessionService", () => {
               async isVisible() {
                 return selector.includes("立即签到")
               },
-              async click() {
-                return undefined
+              async evaluate(fn: unknown) {
+                const source = String(fn)
+                if (source.includes("ariaBusy")) {
+                  return {
+                    text: "Check in now",
+                    disabled: false,
+                    ariaBusy: "",
+                  }
+                }
+
+                return "Check in now"
               },
             }
           },
@@ -1140,7 +1149,10 @@ describe("PlaywrightSiteSessionService", () => {
     expect(responseCall).toBeGreaterThanOrEqual(2)
     expect(routeCalls).toBe(0)
     expect(unrouteCalls).toBe(0)
-    expect(progress).toContain("RunAnytime 原生点击签到按钮：Check in now")
+    expect(progress).toContain(
+      "RunAnytime 按钮状态：text=Check in now disabled=false aria-busy=<empty>",
+    )
+    expect(progress).toContain("RunAnytime 事件派发点击签到按钮：Check in now")
     expect(progress).toContain("使用浏览器上下文点击签到按钮")
     expect(progress).toContain("检测到首次签到响应要求 Turnstile，等待浏览器完成后续验证")
   })
