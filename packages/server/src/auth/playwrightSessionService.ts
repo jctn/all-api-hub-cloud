@@ -1229,7 +1229,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         })
       }
 
-      let browserResponse: { statusCode: number; rawText: string } | null = null
+      let browserResponse:
+        | { statusCode: number; rawText: string; requestUrl?: string }
+        | null = null
       try {
         const responsePromise = page.waitForResponse(
           (response) =>
@@ -1266,6 +1268,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         browserResponse = {
           statusCode: response.status(),
           rawText: await response.text().catch(() => ""),
+          requestUrl: response.url(),
         }
 
         const firstPayload = this.tryParseJsonRecord(browserResponse.rawText)
@@ -1327,10 +1330,26 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             }
           }
 
+          if (!followupResponse && browserResponse.requestUrl) {
+            await this.reportProgress(
+              options,
+              "尝试从页面中提取 Turnstile token 并手动补发第二次签到请求",
+            )
+            const manualFollowup = await this.performRunAnytimeTurnstileFollowup(
+              page,
+              account,
+              browserResponse.requestUrl,
+            )
+            if (manualFollowup) {
+              browserResponse = manualFollowup
+            }
+          }
+
           if (followupResponse) {
             browserResponse = {
               statusCode: followupResponse.status(),
               rawText: await followupResponse.text().catch(() => ""),
+              requestUrl: followupResponse.url(),
             }
           } else {
             await this.reportProgress(
@@ -1781,6 +1800,99 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         checkInUrl,
       }
     }
+  }
+
+  private async performRunAnytimeTurnstileFollowup(
+    page: Page,
+    account: SiteAccount,
+    requestUrl: string,
+  ): Promise<{ statusCode: number; rawText: string; requestUrl: string } | null> {
+    const extractedAccessToken = await this.extractAccessToken(page, {
+      hostname: "runanytime.hxi.me",
+      loginPath: "/login",
+      loginButtonSelectors: [],
+      successUrlPatterns: ["/console"],
+      tokenStorageKeys: ["user", "token", "access_token"],
+      postLoginSelectors: [],
+    }).catch(() => "")
+
+    return await page
+      .evaluate(
+        async ({
+          requestUrl,
+          fallbackUserId,
+          fallbackAccessToken,
+        }: {
+          requestUrl: string
+          fallbackUserId: string
+          fallbackAccessToken: string
+        }) => {
+          const waitForTurnstileToken = async (): Promise<string> => {
+            const startedAt = Date.now()
+            while (Date.now() - startedAt < 30_000) {
+              const tokenField = document.querySelector(
+                'input[name=\"cf-turnstile-response\"], textarea[name=\"cf-turnstile-response\"]',
+              ) as HTMLInputElement | HTMLTextAreaElement | null
+              const token = tokenField?.value?.trim() || ""
+              if (token) {
+                return token
+              }
+              await new Promise((resolve) => setTimeout(resolve, 1_000))
+            }
+            return ""
+          }
+
+          const turnstileToken = await waitForTurnstileToken()
+          if (!turnstileToken) {
+            return null
+          }
+
+          const firstUrl = new URL(requestUrl)
+          const secondUrl = new URL("/api/user/checkin", location.origin)
+          secondUrl.searchParams.set("turnstile", turnstileToken)
+
+          const powChallenge = firstUrl.searchParams.get("pow_challenge")
+          const powNonce = firstUrl.searchParams.get("pow_nonce")
+          if (powChallenge) {
+            secondUrl.searchParams.set("pow_challenge", powChallenge)
+          }
+          if (powNonce) {
+            secondUrl.searchParams.set("pow_nonce", powNonce)
+          }
+
+          const headers: Record<string, string> = {
+            accept: "application/json, text/plain, */*",
+            "cache-control": "no-store",
+            "new-api-user":
+              fallbackUserId ||
+              document.body?.innerText.match(/ID:\\s*(\\d+)/u)?.[1] ||
+              "",
+          }
+
+          if (fallbackAccessToken) {
+            headers.Authorization = `Bearer ${fallbackAccessToken}`
+          }
+
+          const response = await fetch(secondUrl.toString(), {
+            method: "POST",
+            credentials: "include",
+            headers,
+          })
+
+          return {
+            statusCode: response.status,
+            rawText: await response.text(),
+            requestUrl: secondUrl.toString(),
+          }
+        },
+        {
+          requestUrl,
+          fallbackUserId:
+            account.account_info.id > 0 ? String(account.account_info.id) : "",
+          fallbackAccessToken: extractedAccessToken,
+        },
+      )
+      .catch(() => null)
   }
 
   private buildBrowserSessionCheckinHeaders(

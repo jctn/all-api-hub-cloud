@@ -930,6 +930,16 @@ describe("PlaywrightSiteSessionService", () => {
       },
       async waitForResponse() {
         return {
+          url() {
+            return "https://demo.example.com/api/user/checkin"
+          },
+          request() {
+            return {
+              method() {
+                return "POST"
+              },
+            }
+          },
           status() {
             return 200
           },
