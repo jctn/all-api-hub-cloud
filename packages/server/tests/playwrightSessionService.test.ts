@@ -1013,7 +1013,14 @@ describe("PlaywrightSiteSessionService", () => {
         if (Array.isArray(arg)) {
           return ""
         }
-        return "Check in now"
+        return {
+          buttonState: {
+            text: "Check in now",
+            disabled: false,
+            ariaBusy: "",
+          },
+          clickResult: "react:Check in now",
+        }
       },
       async goto() {
         return undefined
@@ -1155,6 +1162,50 @@ describe("PlaywrightSiteSessionService", () => {
     expect(progress).toContain("RunAnytime 页面内直接调用签到逻辑：Check in now")
     expect(progress).toContain("使用浏览器上下文点击签到按钮")
     expect(progress).toContain("检测到首次签到响应要求 Turnstile，等待浏览器完成后续验证")
+  })
+
+  it("falls back to a page-level runanytime handler when Playwright locators are unavailable", async () => {
+    const progress: string[] = []
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async () => {
+        throw new Error("unexpected node fetch call")
+      },
+    )
+
+    const page = {
+      async evaluate() {
+        return {
+          buttonState: {
+            text: "Check in now",
+            disabled: false,
+            ariaBusy: "",
+          },
+          clickResult: "react:Check in now",
+        }
+      },
+      locator() {
+        throw new Error("locator crashed")
+      },
+    }
+
+    const clicked = await (service as unknown as {
+      clickRunAnytimeCheckinButton: (
+        page: typeof page,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<boolean>
+    }).clickRunAnytimeCheckinButton(page, {
+      onProgress(message) {
+        progress.push(message)
+      },
+    })
+
+    expect(clicked).toBe(true)
+    expect(progress).toContain(
+      "RunAnytime 按钮状态：text=Check in now disabled=false aria-busy=<empty>",
+    )
+    expect(progress).toContain("RunAnytime 页面内直接调用签到逻辑：Check in now")
   })
 
   it("normalizes browser-session check-in headers so they do not expose HeadlessChrome", () => {

@@ -2622,180 +2622,210 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     page: Page,
     options: SessionRefreshOptions,
   ): Promise<boolean> {
-    const selectors = [
-      "button:has-text('Check in now')",
-      "button:has-text('check in now')",
-      "button:has-text('Check In Now')",
-      "button:has-text('立即签到')",
-    ]
+    const pageResult = await page
+      .evaluate(() => {
+        const targetTexts = new Set([
+          "check in now",
+          "checkin now",
+          "立即签到",
+        ])
 
-    for (const selector of selectors) {
-      const locator = page.locator(selector).first()
-      const count = await locator.count().catch(() => 0)
-      if (count === 0) {
-        continue
-      }
-
-      const visible = await locator.isVisible().catch(() => false)
-      if (!visible) {
-        continue
-      }
-
-      const buttonState = await locator
-        .evaluate((element) => {
-          const button = element as HTMLButtonElement
-          return {
-            text: (button.textContent || "").trim(),
-            disabled: button.disabled,
-            ariaBusy: button.getAttribute("aria-busy") || "",
+        const isVisible = (element: HTMLElement): boolean => {
+          const style = window.getComputedStyle(element)
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.opacity === "0"
+          ) {
+            return false
           }
-        })
-        .catch(() => ({
-          text: selector,
-          disabled: false,
-          ariaBusy: "",
-        }))
+          const rect = element.getBoundingClientRect()
+          return rect.width > 0 && rect.height > 0
+        }
 
-      await this.reportProgress(
-        options,
-        `RunAnytime 按钮状态：text=${buttonState.text || "<empty>"} disabled=${buttonState.disabled} aria-busy=${buttonState.ariaBusy || "<empty>"}`,
-      )
-
-      if (buttonState.disabled) {
-        continue
-      }
-
-      const clickResult = await locator
-        .evaluate((element) => {
-          const button = element as HTMLElement
-          const text = (button.textContent || "").trim()
-
-          const createSyntheticEvent = () => ({
-            type: "click",
+        const createSyntheticEvent = (button: HTMLElement) => ({
+          type: "click",
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          defaultPrevented: false,
+          currentTarget: button,
+          target: button,
+          nativeEvent: new MouseEvent("click", {
             bubbles: true,
             cancelable: true,
             composed: true,
-            defaultPrevented: false,
-            currentTarget: button,
-            target: button,
-            nativeEvent: new MouseEvent("click", {
+          }),
+          preventDefault() {
+            this.defaultPrevented = true
+          },
+          stopPropagation() {},
+          isDefaultPrevented() {
+            return this.defaultPrevented
+          },
+          isPropagationStopped() {
+            return false
+          },
+          persist() {},
+        })
+
+        const findReactOnClick = (
+          node: HTMLElement | null,
+        ): ((event: unknown) => unknown) | null => {
+          let current = node as (HTMLElement & Record<string, unknown>) | null
+          while (current) {
+            for (const key of Object.keys(current)) {
+              if (key.startsWith("__reactProps$")) {
+                const props = current[key] as Record<string, unknown> | undefined
+                if (props && typeof props.onClick === "function") {
+                  return props.onClick as (event: unknown) => unknown
+                }
+              }
+
+              if (key.startsWith("__reactFiber$")) {
+                const fiber = current[key] as
+                  | {
+                      memoizedProps?: Record<string, unknown>
+                      return?: {
+                        memoizedProps?: Record<string, unknown>
+                      } | null
+                    }
+                  | undefined
+
+                if (fiber?.memoizedProps && typeof fiber.memoizedProps.onClick === "function") {
+                  return fiber.memoizedProps.onClick as (event: unknown) => unknown
+                }
+
+                if (
+                  fiber?.return?.memoizedProps &&
+                  typeof fiber.return.memoizedProps.onClick === "function"
+                ) {
+                  return fiber.return.memoizedProps.onClick as (event: unknown) => unknown
+                }
+              }
+            }
+
+            current = current.parentElement as (HTMLElement & Record<string, unknown>) | null
+          }
+
+          return null
+        }
+
+        const normalizeButtonText = (element: HTMLElement): string =>
+          (element.textContent || "").trim().replace(/\s+/gu, " ")
+
+        const candidates = Array.from(
+          document.querySelectorAll("button, [role='button']"),
+        )
+          .map((element) => element as HTMLElement)
+          .filter((element) => {
+            if (!isVisible(element)) {
+              return false
+            }
+            const normalizedText = normalizeButtonText(element).toLowerCase()
+            return targetTexts.has(normalizedText)
+          })
+
+        const button = candidates[0] ?? null
+        if (!button) {
+          return null
+        }
+
+        const text = normalizeButtonText(button)
+        const disabled =
+          button.hasAttribute("disabled") ||
+          button.getAttribute("aria-disabled") === "true" ||
+          (button as HTMLButtonElement).disabled === true
+        const ariaBusy = button.getAttribute("aria-busy") || ""
+
+        const buttonState = {
+          text,
+          disabled,
+          ariaBusy,
+        }
+
+        if (disabled) {
+          return {
+            buttonState,
+            clickResult: "",
+          }
+        }
+
+        const reactOnClick = findReactOnClick(button)
+        if (reactOnClick) {
+          const maybePromise = reactOnClick(createSyntheticEvent(button))
+          if (maybePromise && typeof (maybePromise as PromiseLike<unknown>).then === "function") {
+            void (maybePromise as PromiseLike<unknown>).then(
+              () => undefined,
+              () => undefined,
+            )
+          }
+          return {
+            buttonState,
+            clickResult: `react:${text}`,
+          }
+        }
+
+        if (typeof (button as HTMLButtonElement).click === "function") {
+          ;(button as HTMLButtonElement).click()
+          return {
+            buttonState,
+            clickResult: `native:${text}`,
+          }
+        }
+
+        const eventTypes = [
+          "pointerdown",
+          "mousedown",
+          "pointerup",
+          "mouseup",
+          "click",
+        ]
+
+        for (const type of eventTypes) {
+          button.dispatchEvent(
+            new MouseEvent(type, {
               bubbles: true,
               cancelable: true,
               composed: true,
             }),
-            preventDefault() {
-              this.defaultPrevented = true
-            },
-            stopPropagation() {},
-            isDefaultPrevented() {
-              return this.defaultPrevented
-            },
-            isPropagationStopped() {
-              return false
-            },
-            persist() {},
-          })
+          )
+        }
 
-          const findReactOnClick = (
-            node: HTMLElement | null,
-          ): ((event: unknown) => unknown) | null => {
-            let current = node as (HTMLElement & Record<string, unknown>) | null
-            while (current) {
-              for (const key of Object.keys(current)) {
-                if (key.startsWith("__reactProps$")) {
-                  const props = current[key] as Record<string, unknown> | undefined
-                  if (props && typeof props.onClick === "function") {
-                    return props.onClick as (event: unknown) => unknown
-                  }
-                }
+        return {
+          buttonState,
+          clickResult: `dispatch:${text}`,
+        }
+      })
+      .catch(() => null)
 
-                if (key.startsWith("__reactFiber$")) {
-                  const fiber = current[key] as
-                    | {
-                        memoizedProps?: Record<string, unknown>
-                        return?: {
-                          memoizedProps?: Record<string, unknown>
-                        } | null
-                      }
-                    | undefined
-                  if (fiber?.memoizedProps && typeof fiber.memoizedProps.onClick === "function") {
-                    return fiber.memoizedProps.onClick as (event: unknown) => unknown
-                  }
-                  if (
-                    fiber?.return?.memoizedProps &&
-                    typeof fiber.return.memoizedProps.onClick === "function"
-                  ) {
-                    return fiber.return.memoizedProps.onClick as (event: unknown) => unknown
-                  }
-                }
-              }
-
-              current = current.parentElement as (HTMLElement & Record<string, unknown>) | null
-            }
-
-            return null
-          }
-
-          const reactOnClick = findReactOnClick(button)
-          if (reactOnClick) {
-            const maybePromise = reactOnClick(createSyntheticEvent())
-            if (maybePromise && typeof (maybePromise as PromiseLike<unknown>).then === "function") {
-              void (maybePromise as PromiseLike<unknown>).then(
-                () => undefined,
-                () => undefined,
-              )
-            }
-            return `react:${text}`
-          }
-
-          if (typeof (button as HTMLButtonElement).click === "function") {
-            ;(button as HTMLButtonElement).click()
-            return `native:${text}`
-          }
-
-          const eventTypes = [
-            "pointerdown",
-            "mousedown",
-            "pointerup",
-            "mouseup",
-            "click",
-          ]
-
-          for (const type of eventTypes) {
-            button.dispatchEvent(
-              new MouseEvent(type, {
-                bubbles: true,
-                cancelable: true,
-                composed: true,
-              }),
-            )
-          }
-
-          return `dispatch:${text}`
-        })
-        .catch(() => "")
-
-      if (!clickResult) {
-        continue
-      }
-
-      const [strategy, rawLabel] = clickResult.includes(":")
-        ? clickResult.split(/:(.+)/u)
-        : ["dispatch", clickResult]
-      const clickedLabel = rawLabel || buttonState.text || selector
-
-      await this.reportProgress(
-        options,
-        strategy === "react"
-          ? `RunAnytime 页面内直接调用签到逻辑：${clickedLabel}`
-          : strategy === "native"
-            ? `RunAnytime 原生 click 触发签到按钮：${clickedLabel}`
-            : `RunAnytime 事件派发点击签到按钮：${clickedLabel}`,
-      )
-      return true
+    if (!pageResult?.buttonState) {
+      return false
     }
 
-    return false
+    await this.reportProgress(
+      options,
+      `RunAnytime 按钮状态：text=${pageResult.buttonState.text || "<empty>"} disabled=${pageResult.buttonState.disabled} aria-busy=${pageResult.buttonState.ariaBusy || "<empty>"}`,
+    )
+
+    if (pageResult.buttonState.disabled || !pageResult.clickResult) {
+      return false
+    }
+
+    const [strategy, rawLabel] = pageResult.clickResult.includes(":")
+      ? pageResult.clickResult.split(/:(.+)/u)
+      : ["dispatch", pageResult.clickResult]
+    const clickedLabel = rawLabel || pageResult.buttonState.text || "Check in now"
+
+    await this.reportProgress(
+      options,
+      strategy === "react"
+        ? `RunAnytime 页面内直接调用签到逻辑：${clickedLabel}`
+        : strategy === "native"
+          ? `RunAnytime 原生 click 触发签到按钮：${clickedLabel}`
+          : `RunAnytime 事件派发点击签到按钮：${clickedLabel}`,
+    )
+    return true
   }
 
   private async clickFirstVisibleWithPopup(
