@@ -991,11 +991,8 @@ describe("PlaywrightSiteSessionService", () => {
     expect(progress).toContain("使用浏览器上下文点击签到按钮")
   })
 
-  it("invokes the runanytime page check-in handler directly and waits for the follow-up turnstile response", async () => {
+  it("completes the runanytime page PoW flow inside the browser context", async () => {
     const progress: string[] = []
-    let routeCalls = 0
-    let unrouteCalls = 0
-    let responseCall = 0
 
     const service = new PlaywrightSiteSessionService(
       {} as StorageRepository,
@@ -1014,115 +1011,55 @@ describe("PlaywrightSiteSessionService", () => {
           return ""
         }
         return {
-          buttonState: {
-            text: "Check in now",
-            disabled: false,
-            ariaBusy: "",
-          },
-          clickResult: "react:Check in now",
-        }
-      },
-      async goto() {
-        return undefined
-      },
-      async route() {
-        routeCalls += 1
-        return undefined
-      },
-      async unroute() {
-        unrouteCalls += 1
-        return undefined
-      },
-      async waitForResponse(
-        predicate: (response: {
-          url(): string
-          request(): { method(): string }
-        }) => boolean,
-      ) {
-        responseCall += 1
-        if (responseCall === 1) {
-          const response = {
-            url() {
-              return "https://runanytime.hxi.me/api/user/checkin?pow_challenge=abc&pow_nonce=1"
-            },
-            request() {
-              return {
-                method() {
-                  return "POST"
-                },
-              }
-            },
-            status() {
-              return 200
-            },
-            async text() {
-              return JSON.stringify({
-                success: false,
-                message: "Turnstile token 为空",
-              })
-            },
-          }
-          expect(predicate(response)).toBe(true)
-          return response
-        }
-
-        const response = {
-          url() {
-            return "https://runanytime.hxi.me/api/user/checkin?turnstile=cf-token&pow_challenge=abc&pow_nonce=2"
-          },
-          request() {
-            return {
-              method() {
-                return "POST"
+          challenge: {
+            statusCode: 200,
+            rawText: JSON.stringify({
+              success: true,
+              data: {
+                challenge_id: "abc",
+                prefix: "pow-prefix",
+                difficulty: 1,
               },
-            }
+            }),
+            payload: {
+              success: true,
+              data: {
+                challenge_id: "abc",
+                prefix: "pow-prefix",
+                difficulty: 1,
+              },
+            },
           },
-          status() {
-            return 200
+          solved: {
+            nonce: "00000001",
+            attempts: 2,
           },
-          async text() {
-            return JSON.stringify({
+          checkin: {
+            statusCode: 200,
+            rawText: JSON.stringify({
               success: true,
               message: "签到成功",
               data: {
                 quota_awarded: 12500000,
               },
-            })
+            }),
+            payload: {
+              success: true,
+              message: "签到成功",
+              data: {
+                quota_awarded: 12500000,
+              },
+            },
           },
         }
-        expect(predicate(response)).toBe(true)
-        return response
       },
-      locator(selector: string) {
-        return {
-          first() {
-            return {
-              async count() {
-                return selector.includes("立即签到") ? 1 : 0
-              },
-              async isVisible() {
-                return selector.includes("立即签到")
-              },
-              async evaluate(fn: unknown) {
-                const source = String(fn)
-                if (source.includes("ariaBusy")) {
-                  return {
-                    text: "Check in now",
-                    disabled: false,
-                    ariaBusy: "",
-                  }
-                }
-
-                return "react:Check in now"
-              },
-            }
-          },
-        }
+      async goto() {
+        return undefined
       },
     }
 
     const result = await (service as unknown as {
-      performBrowserSessionCheckin: (
+      performRunAnytimePowCheckin: (
         page: typeof page,
         account: SiteAccount,
         profile: SiteLoginProfile,
@@ -1131,7 +1068,7 @@ describe("PlaywrightSiteSessionService", () => {
         status: CheckinResultStatus
         message: string
       }>
-    }).performBrowserSessionCheckin(
+    }).performRunAnytimePowCheckin(
       page,
       {
         ...baseAccount,
@@ -1153,15 +1090,7 @@ describe("PlaywrightSiteSessionService", () => {
     expect(result.message).toContain("签到成功")
     expect(result.message).toContain("已通过浏览器会话补签")
     expect(result.message).toContain("获得")
-    expect(responseCall).toBeGreaterThanOrEqual(2)
-    expect(routeCalls).toBe(0)
-    expect(unrouteCalls).toBe(0)
-    expect(progress).toContain(
-      "RunAnytime 按钮状态：text=Check in now disabled=false aria-busy=<empty>",
-    )
-    expect(progress).toContain("RunAnytime 页面内直接调用签到逻辑：Check in now")
-    expect(progress).toContain("使用浏览器上下文点击签到按钮")
-    expect(progress).toContain("检测到首次签到响应要求 Turnstile，等待浏览器完成后续验证")
+    expect(progress).toContain("检测到 RunAnytime 站点，直接执行 PoW 签到协议")
   })
 
   it("falls back to a page-level runanytime handler when Playwright locators are unavailable", async () => {
@@ -1206,6 +1135,124 @@ describe("PlaywrightSiteSessionService", () => {
       "RunAnytime 按钮状态：text=Check in now disabled=false aria-busy=<empty>",
     )
     expect(progress).toContain("RunAnytime 页面内直接调用签到逻辑：Check in now")
+  })
+
+  it("delegates runanytime browser-session check-in to the page PoW flow once the site session is ready", async () => {
+    const progress: string[] = []
+    let powCalled = false
+    let buttonCalled = false
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async () => {
+        throw new Error("unexpected node fetch call")
+      },
+    )
+
+    ;(
+      service as unknown as {
+        performRunAnytimePowCheckin: (
+          page: unknown,
+          account: SiteAccount,
+          profile: SiteLoginProfile,
+          options: { onProgress?: (message: string) => void | Promise<void> },
+        ) => Promise<{
+          status: CheckinResultStatus
+          message: string
+        }>
+      }
+    ).performRunAnytimePowCheckin = async (_page, _account, _profile, options) => {
+      powCalled = true
+      await options.onProgress?.("检测到 RunAnytime 已登录页面，直接执行页面内 PoW 签到流")
+      return {
+        status: CheckinResultStatus.Success,
+        message: "签到成功；已通过浏览器会话补签",
+      }
+    }
+
+    ;(
+      service as unknown as {
+        clickRunAnytimeCheckinButton: (
+          page: unknown,
+          options: { onProgress?: (message: string) => void | Promise<void> },
+        ) => Promise<boolean>
+      }
+    ).clickRunAnytimeCheckinButton = async () => {
+      buttonCalled = true
+      return true
+    }
+
+    const page = {
+      url() {
+        return "https://runanytime.hxi.me/console/personal"
+      },
+      async goto() {
+        return undefined
+      },
+      async route() {
+        return undefined
+      },
+      async unroute() {
+        return undefined
+      },
+      async waitForResponse() {
+        return {
+          url() {
+            return "https://runanytime.hxi.me/api/user/checkin"
+          },
+          request() {
+            return {
+              method() {
+                return "POST"
+              },
+            }
+          },
+          status() {
+            return 200
+          },
+          async text() {
+            return JSON.stringify({
+              success: true,
+              message: "签到成功",
+            })
+          },
+        }
+      },
+    }
+
+    const result = await (service as unknown as {
+      performBrowserSessionCheckin: (
+        page: typeof page,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<{
+        status: CheckinResultStatus
+        message: string
+      }>
+    }).performBrowserSessionCheckin(
+      page,
+      {
+        ...baseAccount,
+        site_name: "随时跑路公益站",
+        site_url: "https://runanytime.hxi.me",
+      },
+      {
+        ...baseProfile,
+        hostname: "runanytime.hxi.me",
+      },
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(result.status).toBe(CheckinResultStatus.Success)
+    expect(powCalled).toBe(true)
+    expect(buttonCalled).toBe(false)
+    expect(progress).toContain("检测到 RunAnytime 已登录页面，直接执行页面内 PoW 签到流")
   })
 
   it("normalizes browser-session check-in headers so they do not expose HeadlessChrome", () => {

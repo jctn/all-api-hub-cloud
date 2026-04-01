@@ -1216,6 +1216,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       })
     }
 
+    if (this.isRunAnytimeSite(account)) {
+      await this.reportProgress(
+        options,
+        "检测到 RunAnytime 已登录页面，直接执行页面内 PoW 签到流",
+      )
+      return await this.performRunAnytimePowCheckin(page, account, profile, options)
+    }
+
     await this.reportProgress(options, "使用浏览器上下文点击签到按钮")
 
     try {
