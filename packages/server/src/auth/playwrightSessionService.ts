@@ -1219,6 +1219,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     await this.reportProgress(options, "使用浏览器上下文点击签到按钮")
 
     try {
+      let lastObservedUrl = page.url()
       const pageState = {
         pageClosed: false,
         pageCrashed: false,
@@ -1237,14 +1238,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         pageState.pageClosed = true
         void this.reportProgress(
           options,
-          `诊断：页面已关闭；最后 URL=${page.url()}`,
+          `诊断：页面已关闭；最后 URL=${lastObservedUrl}`,
         )
       })
       pageWithEvents.on?.("crash", () => {
         pageState.pageCrashed = true
         void this.reportProgress(
           options,
-          `诊断：页面已崩溃；最后 URL=${page.url()}`,
+          `诊断：页面已崩溃；最后 URL=${lastObservedUrl}`,
         )
       })
       contextWithEvents?.on?.("close", () => {
@@ -1266,9 +1267,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         | { statusCode: number; rawText: string; requestUrl?: string }
         | null = null
       try {
+        lastObservedUrl = page.url()
         await this.reportProgress(
           options,
-          `准备等待签到请求响应；当前 URL=${page.url()}`,
+          `准备等待签到请求响应；当前 URL=${lastObservedUrl}`,
         )
         const responsePromise = page.waitForResponse(
           (response) =>
@@ -1290,33 +1292,47 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               .catch(() => null)
           : null
 
+        lastObservedUrl = page.url()
         await this.reportProgress(
           options,
-          `准备点击签到按钮；当前 URL=${page.url()}`,
+          `准备点击签到按钮；当前 URL=${lastObservedUrl}`,
         )
-        const clicked = await this.clickFirstVisible(page, [
-          "button:has-text('Check in now')",
-          "button:has-text('check in now')",
-          "button:has-text('Check In Now')",
-          "button:has-text('立即签到')",
-        ])
+        let clicked = false
+        try {
+          clicked = await this.clickFirstVisible(page, [
+            "button:has-text('Check in now')",
+            "button:has-text('check in now')",
+            "button:has-text('Check In Now')",
+            "button:has-text('立即签到')",
+          ])
+        } catch (error) {
+          await this.reportProgress(
+            options,
+            `点击签到按钮异常：${describeError(error)}；pageClosed=${pageState.pageClosed} pageCrashed=${pageState.pageCrashed} contextClosed=${pageState.contextClosed} 最后URL=${lastObservedUrl}`,
+          )
+          throw error
+        }
 
         if (!clicked) {
           throw new Error("未找到签到按钮")
         }
 
+        lastObservedUrl = page.url()
         await this.reportProgress(
           options,
-          `签到按钮点击完成；当前 URL=${page.url()}`,
+          `签到按钮点击完成；当前 URL=${lastObservedUrl}`,
         )
 
         let response
         try {
           response = await responsePromise
         } catch (error) {
+          lastObservedUrl = pageState.pageClosed || pageState.pageCrashed
+            ? lastObservedUrl
+            : page.url()
           await this.reportProgress(
             options,
-            `等待首个签到响应异常：${describeError(error)}；pageClosed=${pageState.pageClosed} pageCrashed=${pageState.pageCrashed} contextClosed=${pageState.contextClosed} 当前URL=${page.url()}`,
+            `等待首个签到响应异常：${describeError(error)}；pageClosed=${pageState.pageClosed} pageCrashed=${pageState.pageCrashed} contextClosed=${pageState.contextClosed} 当前URL=${lastObservedUrl}`,
           )
           throw error
         }
