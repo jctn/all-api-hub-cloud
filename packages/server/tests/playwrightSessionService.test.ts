@@ -1034,6 +1034,8 @@ describe("PlaywrightSiteSessionService", () => {
             nonce: "00000001",
             attempts: 2,
           },
+          requestUrl:
+            "https://runanytime.hxi.me/api/user/checkin?pow_challenge=abc&pow_nonce=00000001",
           checkin: {
             statusCode: 200,
             rawText: JSON.stringify({
@@ -1091,6 +1093,125 @@ describe("PlaywrightSiteSessionService", () => {
     expect(result.message).toContain("已通过浏览器会话补签")
     expect(result.message).toContain("获得")
     expect(progress).toContain("检测到 RunAnytime 站点，直接执行 PoW 签到协议")
+  })
+
+  it("retries runanytime page PoW check-in once turnstile follow-up becomes available", async () => {
+    const progress: string[] = []
+    let followupCalled = false
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+      async () => {
+        throw new Error("unexpected node fetch call")
+      },
+    )
+
+    ;(
+      service as unknown as {
+        performRunAnytimeTurnstileFollowup: (
+          page: unknown,
+          account: SiteAccount,
+          requestUrl: string,
+        ) => Promise<{ statusCode: number; rawText: string; requestUrl: string } | null>
+      }
+    ).performRunAnytimeTurnstileFollowup = async (_page, _account, requestUrl) => {
+      followupCalled = true
+      return {
+        statusCode: 200,
+        rawText: JSON.stringify({
+          success: true,
+          message: "签到成功",
+          data: {
+            quota_awarded: 5200000,
+          },
+        }),
+        requestUrl: `${requestUrl}&turnstile=cf-token`,
+      }
+    }
+
+    const page = {
+      url() {
+        return "https://runanytime.hxi.me/console/personal"
+      },
+      async evaluate(_fn: unknown, arg?: unknown) {
+        if (Array.isArray(arg)) {
+          return ""
+        }
+        return {
+          challenge: {
+            statusCode: 200,
+            rawText: JSON.stringify({
+              success: true,
+              data: {
+                challenge_id: "abc",
+                prefix: "pow-prefix",
+                difficulty: 1,
+              },
+            }),
+            payload: {
+              success: true,
+              data: {
+                challenge_id: "abc",
+                prefix: "pow-prefix",
+                difficulty: 1,
+              },
+            },
+          },
+          solved: {
+            nonce: "00000001",
+            attempts: 2,
+          },
+          requestUrl:
+            "https://runanytime.hxi.me/api/user/checkin?pow_challenge=abc&pow_nonce=00000001",
+          checkin: {
+            statusCode: 200,
+            rawText: JSON.stringify({
+              success: false,
+              message: "Turnstile token 为空",
+            }),
+            payload: {
+              success: false,
+              message: "Turnstile token 为空",
+            },
+          },
+        }
+      },
+    }
+
+    const result = await (service as unknown as {
+      performRunAnytimePowCheckin: (
+        page: typeof page,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<{
+        status: CheckinResultStatus
+        message: string
+      }>
+    }).performRunAnytimePowCheckin(
+      page,
+      {
+        ...baseAccount,
+        site_name: "随时跑路公益站",
+        site_url: "https://runanytime.hxi.me",
+      },
+      {
+        ...baseProfile,
+        hostname: "runanytime.hxi.me",
+      },
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(result.status).toBe(CheckinResultStatus.Success)
+    expect(result.message).toContain("签到成功")
+    expect(result.message).toContain("已通过浏览器会话补签")
+    expect(followupCalled).toBe(true)
+    expect(progress).toContain("检测到 RunAnytime PoW 首次响应要求 Turnstile，尝试等待页面验证结果")
   })
 
   it("falls back to a page-level runanytime handler when Playwright locators are unavailable", async () => {

@@ -1753,6 +1753,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           return {
             challenge,
             solved,
+            requestUrl: url.toString(),
             checkin: await parseJson(checkinResponse),
           }
         },
@@ -1763,7 +1764,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         },
       )
 
-      const checkinResponse = browserResult.checkin
+      let checkinResponse = browserResult.checkin
       if (!checkinResponse) {
         const challengeMessage = resolvePayloadMessage(
           browserResult.challenge?.payload ?? null,
@@ -1784,8 +1785,33 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         }
       }
 
-      const payload = checkinResponse.payload
-      const message = resolvePayloadMessage(payload, checkinResponse.rawText)
+      let payload = checkinResponse.payload
+      let message = resolvePayloadMessage(payload, checkinResponse.rawText)
+      if (message.includes("Turnstile token 为空") && browserResult.requestUrl) {
+        await this.reportProgress(
+          options,
+          "检测到 RunAnytime PoW 首次响应要求 Turnstile，尝试等待页面验证结果",
+        )
+        const followupResponse = await this.performRunAnytimeTurnstileFollowup(
+          page,
+          account,
+          browserResult.requestUrl,
+        )
+        if (followupResponse) {
+          checkinResponse = {
+            statusCode: followupResponse.statusCode,
+            rawText: followupResponse.rawText,
+            payload: this.tryParseJsonRecord(followupResponse.rawText),
+          }
+          payload = checkinResponse.payload
+          message = resolvePayloadMessage(payload, checkinResponse.rawText)
+        } else {
+          await this.reportProgress(
+            options,
+            "RunAnytime Turnstile 页面验证结果仍不可用，保留首次 PoW 响应",
+          )
+        }
+      }
       const isSuccess = payload?.success === true
 
       if (isSuccess) {
