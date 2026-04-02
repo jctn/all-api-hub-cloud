@@ -5,6 +5,7 @@
 - 已有 Zeabur PostgreSQL 服务
 - 准备部署当前仓库中的 `packages/server`
 - 希望使用 PostgreSQL 保存结构化数据，Volume 保存 Playwright profile 与 diagnostics
+- 希望保留 Telegram 云端入口，但把部分站点的浏览器签到交给本地真实浏览器 worker
 
 当前代码已经固定的运行约束：
 
@@ -14,7 +15,8 @@
 - Playwright 共享 SSO profile 固定落到 `/data/all-api-hub/profiles/cloud/linuxdo-github`
 - diagnostics 固定落到 `/data/all-api-hub/diagnostics`
 - Telegram 仅允许 `TG_ADMIN_CHAT_ID` 对应的管理员私聊
-- 内部 HTTP 接口统一使用 `Authorization: Bearer <INTERNAL_ADMIN_TOKEN>`
+- 管理员内部 HTTP 接口继续使用 `Authorization: Bearer <INTERNAL_ADMIN_TOKEN>`
+- 本地 worker 的领取、心跳、进度、完成回传接口改用 `Authorization: Bearer <LOCAL_WORKER_TOKEN>`
 
 ## 1. 部署拓扑
 
@@ -57,6 +59,7 @@ TG_BOT_TOKEN
 TG_WEBHOOK_SECRET
 TG_ADMIN_CHAT_ID
 INTERNAL_ADMIN_TOKEN
+LOCAL_WORKER_TOKEN
 GITHUB_USERNAME
 GITHUB_PASSWORD
 GITHUB_TOTP_SECRET
@@ -70,6 +73,7 @@ SITE_LOGIN_PROFILES_JSON
 - 如果只拿到了 `POSTGRES_CONNECTION_STRING`，可以不填 `DATABASE_URL`
 - `TG_WEBHOOK_SECRET` 建议使用 48 到 64 位随机字符串
 - `INTERNAL_ADMIN_TOKEN` 建议使用 48 到 64 位随机字符串
+- `LOCAL_WORKER_TOKEN` 建议使用另一组独立的 48 到 64 位随机字符串，不要与 `INTERNAL_ADMIN_TOKEN` 复用
 - `GITHUB_TOTP_SECRET` 必须是 GitHub TOTP setup key，不是一次性验证码
 - `SITE_LOGIN_PROFILES_JSON` 首轮部署可以直接填 `{}`；只有在开始配置自动续期时，才需要替换成单行 JSON
 - 如果你启用了本文档后面提到的“部署阶段 Telegram 通知”，`TG_BOT_TOKEN` 与 `TG_ADMIN_CHAT_ID` 也要能在 Docker build 阶段读取到；当前代码会复用同一只管理员私聊机器人
@@ -82,6 +86,7 @@ TG_BOT_TOKEN=<BotFather token>
 TG_WEBHOOK_SECRET=<random 48-64 chars>
 TG_ADMIN_CHAT_ID=<your telegram private chat id>
 INTERNAL_ADMIN_TOKEN=<random 48-64 chars>
+LOCAL_WORKER_TOKEN=<random 48-64 chars>
 GITHUB_USERNAME=<your github username>
 GITHUB_PASSWORD=<your github password>
 GITHUB_TOTP_SECRET=<your github totp setup key>
@@ -150,6 +155,7 @@ JSON 结构固定为“以 hostname 为 key 的对象”，示例：
 ```json
 {
   "demo.example.com": {
+    "executionMode": "local-browser",
     "loginPath": "/auth/login",
     "loginButtonSelectors": [
       "button[data-provider='linuxdo']",
@@ -173,6 +179,8 @@ JSON 结构固定为“以 hostname 为 key 的对象”，示例：
 
 字段规则：
 
+- `executionMode`
+  可选；`cloud` 表示继续走 Zeabur 容器内浏览器，`local-browser` 表示转交本地 worker；不填时默认 `cloud`
 - `loginPath`
   登录页路径；不填时代码默认 `/`
 - `loginButtonSelectors`
@@ -198,6 +206,29 @@ JSON 结构固定为“以 hostname 为 key 的对象”，示例：
 - 如果登录成功后有头像、用户菜单、用户栏，优先放进 `postLoginSelectors`
 
 可直接参考 [examples/site-login-profiles.example.json](/E:/all-api-hub/examples/site-login-profiles.example.json)。
+
+## 4.1 Mixed-Mode 路由
+
+如果某个站点已经确认需要真实机器浏览器，例如会频繁触发 Cloudflare Turnstile 或需要人工偶发接管，推荐直接在 `site-login-profiles.json` 中把该 hostname 标记为：
+
+```json
+{
+  "target.example.com": {
+    "executionMode": "local-browser",
+    "loginPath": "/login",
+    "loginButtonSelectors": ["a[href*='linux.do']"]
+  }
+}
+```
+
+这样系统行为会变成：
+
+1. TG 指令仍然发给云端 bot
+2. 云端按站点分流，把该 host 的浏览器任务入队到本地 worker
+3. 本地 worker 用真实可见 Chromium 执行
+4. 云端只记录任务与结果摘要，不保存本地浏览器实时会话
+
+worker 的本地部署和 `.env` 模板见 [docs/local-browser-worker.md](/E:/all-api-hub/docs/local-browser-worker.md) 与 [packages/worker/.env.example](/E:/all-api-hub/packages/worker/.env.example)。
 
 ## 5. 首次部署步骤
 

@@ -35,6 +35,14 @@ export interface BatchCheckinRunResult {
   refreshedAccountIds: string[]
 }
 
+export interface BatchCheckinExecutionResult {
+  targetAccountIds: string[] | null
+  startedAt: number
+  completedAt: number
+  results: CheckinAccountResult[]
+  refreshedAccountIds: string[]
+}
+
 export interface SessionRefreshAccountResult {
   accountId: string
   siteName: string
@@ -91,6 +99,33 @@ function isScheduledBatchCandidate(account: SiteAccount): boolean {
     account.checkIn.autoCheckInEnabled !== false &&
     hasUsableAuth(account)
   )
+}
+
+export function selectCheckinAccounts(
+  accounts: SiteAccount[],
+  options: Pick<BatchCheckinRunOptions, "accountId">,
+): SiteAccount[] {
+  return options.accountId
+    ? accounts.filter((account) => account.id === options.accountId)
+    : accounts.filter(isScheduledBatchCandidate)
+}
+
+export function buildCheckinRunRecord(params: {
+  targetAccountIds: string[] | null
+  startedAt: number
+  completedAt: number
+  results: CheckinAccountResult[]
+  initiatedBy?: CheckinRunRecord["initiatedBy"]
+}): CheckinRunRecord {
+  return {
+    id: crypto.randomUUID(),
+    initiatedBy: params.initiatedBy ?? "server",
+    targetAccountIds: params.targetAccountIds,
+    startedAt: params.startedAt,
+    completedAt: params.completedAt,
+    summary: summarizeCheckinResults(params.results),
+    results: params.results,
+  }
 }
 
 function isRunAnytimeTurnstileFallbackCandidate(
@@ -153,9 +188,29 @@ export class CheckinOrchestrator {
     options: BatchCheckinRunOptions,
   ): Promise<BatchCheckinRunResult> {
     const allAccounts = await this.repository.getAccounts()
-    const selectedAccounts = options.accountId
-      ? allAccounts.filter((account) => account.id === options.accountId)
-      : allAccounts.filter(isScheduledBatchCandidate)
+    const selectedAccounts = selectCheckinAccounts(allAccounts, options)
+    const execution = await this.executeCheckinBatchForAccounts(
+      selectedAccounts,
+      options,
+    )
+    const record = buildCheckinRunRecord({
+      targetAccountIds: execution.targetAccountIds,
+      startedAt: execution.startedAt,
+      completedAt: execution.completedAt,
+      results: execution.results,
+    })
+
+    await this.repository.appendHistory(record)
+    return {
+      record,
+      refreshedAccountIds: execution.refreshedAccountIds,
+    }
+  }
+
+  async executeCheckinBatchForAccounts(
+    selectedAccounts: SiteAccount[],
+    options: BatchCheckinRunOptions,
+  ): Promise<BatchCheckinExecutionResult> {
     const results: CheckinAccountResult[] = []
     const refreshedAccountIds: string[] = []
     const startedAt = Date.now()
@@ -282,20 +337,14 @@ export class CheckinOrchestrator {
       results.push(result)
     }
 
-    const completedAt = Date.now()
-    const record: CheckinRunRecord = {
-      id: crypto.randomUUID(),
-      initiatedBy: "server",
-      targetAccountIds: options.accountId ? [options.accountId] : null,
-      startedAt,
-      completedAt,
-      summary: summarizeCheckinResults(results),
-      results,
-    }
-
-    await this.repository.appendHistory(record)
     return {
-      record,
+      targetAccountIds:
+        options.accountId || selectedAccounts.length > 0
+          ? selectedAccounts.map((account) => account.id)
+          : null,
+      startedAt,
+      completedAt: Date.now(),
+      results,
       refreshedAccountIds,
     }
   }
@@ -308,6 +357,13 @@ export class CheckinOrchestrator {
     const selectedAccounts = accountId
       ? allAccounts.filter((account) => account.id === accountId)
       : allAccounts.filter((account) => !account.disabled)
+    return this.refreshSessionsForAccounts(selectedAccounts, options)
+  }
+
+  async refreshSessionsForAccounts(
+    selectedAccounts: SiteAccount[],
+    options: SessionRefreshRunOptions = {},
+  ): Promise<SessionRefreshRunResult> {
     const startedAt = Date.now()
     const results: SessionRefreshAccountResult[] = []
 

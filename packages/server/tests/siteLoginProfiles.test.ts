@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest"
 
 import {
   matchSiteLoginProfile,
+  matchOrDefaultSiteLoginProfile,
   parseSiteLoginProfiles,
+  requiresLocalBrowserExecution,
 } from "../src/auth/siteLoginProfiles.js"
 
 describe("site login profiles", () => {
@@ -25,6 +27,7 @@ describe("site login profiles", () => {
       hostname: "demo.example.com",
       loginPath: "/",
       loginButtonSelectors: ["button.login"],
+      executionMode: "cloud",
     })
     expect(profiles["demo.example.com"].tokenStorageKeys.length).toBeGreaterThan(0)
   })
@@ -51,5 +54,32 @@ describe("site login profiles", () => {
     )?.toMatchObject({
       hostname: "*.shared.example.com",
     })
+  })
+
+  it("supports local-browser execution mode and defaults derived profiles to cloud", () => {
+    const profiles = parseSiteLoginProfiles(
+      JSON.stringify({
+        "demo.example.com": {
+          loginButtonSelectors: ["button.login"],
+          executionMode: "local-browser",
+        },
+      }),
+    )
+
+    const explicit = matchSiteLoginProfile(
+      "https://demo.example.com/console",
+      profiles,
+    )
+    const derived = matchOrDefaultSiteLoginProfile(
+      "https://fallback.example.com/console",
+      {},
+      "new-api",
+    )
+
+    expect(explicit?.executionMode).toBe("local-browser")
+    expect(requiresLocalBrowserExecution(explicit)).toBe(true)
+    expect(derived?.executionMode).toBe("cloud")
+    expect(requiresLocalBrowserExecution(derived)).toBe(false)
+    expect(requiresLocalBrowserExecution(null)).toBe(false)
   })
 })

@@ -122,11 +122,14 @@ async function runBuildCommand() {
   const isWindows = process.platform === "win32"
   const command = isWindows ? "npm.cmd" : "npm"
   const cwd = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)))
-  const runCommand = (args) =>
+  const runCommand = (args, extraEnv = {}) =>
     new Promise((resolve, reject) => {
       const child = spawn(command, args, {
         stdio: "inherit",
-        env: process.env,
+        env: {
+          ...process.env,
+          ...extraEnv,
+        },
         cwd,
       })
 
@@ -141,14 +144,21 @@ async function runBuildCommand() {
       })
     })
 
-  await runCommand([
-    "run",
-    "build",
-    "--workspace",
-    "@all-api-hub/core",
-    "--workspace",
-    "@all-api-hub/server",
-  ])
+  await runCommand(
+    [
+      "run",
+      "build",
+      "--workspace",
+      "@all-api-hub/core",
+      "--workspace",
+      "@all-api-hub/browser",
+      "--workspace",
+      "@all-api-hub/server",
+    ],
+    {
+      ALL_API_HUB_DISABLE_SERVER_DTS: "1",
+    },
+  )
   await runCommand(["prune", "--omit=dev"])
 }
 

@@ -6,4 +6,5 @@ IMPORT_REPO_OWNER=jctn
 IMPORT_REPO_NAME=all-api-hub-cloud
 IMPORT_REPO_PATH=all-api-hub-backup-2026-03-19.json
 IMPORT_REPO_REF=main
+SITE_LOGIN_PROFILES_REPO_PATH=site-login-profiles.json
 TZ=Asia/Shanghai

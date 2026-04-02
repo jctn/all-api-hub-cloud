@@ -2,9 +2,9 @@ import type { SiteAccount, StorageRepository } from "@all-api-hub/core"
 import { Bot } from "grammy"
 import type { UserFromGetMe } from "grammy/types"
 
-import type { CheckinOrchestrator } from "../checkin/orchestrator.js"
 import type { ServerConfig } from "../config.js"
 import type { GitHubBackupImporter } from "../importing/githubRepoImporter.js"
+import type { CheckinExecutionController } from "../localWorker/hybridOrchestrator.js"
 import { BusyTaskError, type TaskCoordinator } from "../taskCoordinator.js"
 import {
   formatAccountsMessage,
@@ -55,7 +55,7 @@ export async function createTelegramBot(params: {
   repository: StorageRepository
   taskCoordinator: TaskCoordinator
   importer: GitHubBackupImporter
-  orchestrator: CheckinOrchestrator
+  orchestrator: CheckinExecutionController
   botInfo?: UserFromGetMe
   logger: {
     error(error: unknown, message?: string): void
@@ -308,15 +308,29 @@ export async function createTelegramBot(params: {
 
   bot.command("status", async (ctx) => {
     const chatId = ctx.chat?.id
-    const [settings, history] = await Promise.all([
+    const [settings, history, activeLocalWorkerTask] = await Promise.all([
       params.repository.getSettings(),
       params.repository.getHistory(),
+      params.orchestrator.getActiveLocalWorkerTask?.() ?? Promise.resolve(null),
     ])
+
+    const displayedTask = activeLocalWorkerTask
+      ? {
+          active: true,
+          kind: `local-worker:${activeLocalWorkerTask.kind}`,
+          label: `本地浏览器任务 ${activeLocalWorkerTask.kind} (${activeLocalWorkerTask.status})`,
+          startedAt:
+            activeLocalWorkerTask.startedAt ??
+            activeLocalWorkerTask.claimedAt ??
+            activeLocalWorkerTask.requestedAt,
+          finishedAt: activeLocalWorkerTask.finishedAt,
+        }
+      : params.taskCoordinator.getState()
 
     await sendText(
       chatId,
       formatStatusMessage({
-        task: params.taskCoordinator.getState(),
+        task: displayedTask,
         latestRecord: history.records[0],
         settings,
         timeZone: params.config.timeZone,

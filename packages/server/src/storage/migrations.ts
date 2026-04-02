@@ -88,6 +88,37 @@ const MIGRATIONS: SqlMigration[] = [
       );
     `,
   },
+  {
+    id: "002_local_worker_tasks",
+    sql: `
+      CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+      CREATE TABLE IF NOT EXISTS local_worker_tasks (
+        id text PRIMARY KEY,
+        kind text NOT NULL,
+        scope text NOT NULL,
+        account_ids jsonb NOT NULL,
+        payload jsonb NOT NULL,
+        status text NOT NULL,
+        requested_by text NOT NULL,
+        chat_id text,
+        is_verbose boolean NOT NULL DEFAULT false,
+        worker_id text,
+        progress_text text,
+        heartbeat_at bigint,
+        requested_at bigint NOT NULL,
+        claimed_at bigint,
+        started_at bigint,
+        finished_at bigint,
+        result_json jsonb,
+        error_code text,
+        error_message text
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_local_worker_tasks_status_requested_at
+        ON local_worker_tasks (status, requested_at ASC);
+    `,
+  },
 ]
 
 export interface MigrationResult {

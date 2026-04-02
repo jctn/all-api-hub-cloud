@@ -126,10 +126,25 @@ export interface SiteSessionRefresher {
   ): Promise<CheckinAccountResult | null>
 }
 
+export interface PlaywrightSiteSessionConfig
+  extends Pick<
+    ServerConfig,
+    | "diagnosticsDirectory"
+    | "sharedSsoProfileDirectory"
+    | "chromiumExecutablePath"
+    | "github"
+    | "flareSolverrUrl"
+    | "siteLoginProfiles"
+  > {
+  browserHeadless?: boolean
+  chromiumLaunchArgs?: string[]
+  manualLoginWaitTimeoutMs?: number
+}
+
 export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   constructor(
     private readonly repository: StorageRepository,
-    private readonly config: ServerConfig,
+    private readonly config: PlaywrightSiteSessionConfig,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
@@ -168,8 +183,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         this.config.sharedSsoProfileDirectory,
         {
           executablePath: this.config.chromiumExecutablePath,
-          headless: true,
-          args: ["--no-sandbox", "--disable-dev-shm-usage"],
+          headless: this.resolveBrowserHeadless(),
+          args: this.resolveChromiumLaunchArgs(),
           viewport: { width: 1400, height: 960 },
         },
       )
@@ -193,6 +208,30 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         options,
       )
       if (flowResult.status !== "ready") {
+        const manualPage = await this.waitForManualLoginCompletion(
+          page,
+          account,
+          profile,
+          options,
+        )
+        if (manualPage) {
+          await this.reportProgress(options, "检测到人工接管完成，继续提取会话信息")
+          const refreshedAccount = await this.captureAuthenticatedAccount(
+            manualPage,
+            context,
+            account,
+            profile,
+            options,
+          )
+          if (refreshedAccount) {
+            return {
+              status: "refreshed",
+              message: "人工接管后已提取并保存最新站点会话",
+              account: refreshedAccount,
+            }
+          }
+        }
+
         const diagnosticPath = await this.captureDiagnostic(page, account)
         if (diagnosticPath) {
           await this.reportProgress(options, `已保存诊断截图：${diagnosticPath}`)
@@ -282,8 +321,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         this.config.sharedSsoProfileDirectory,
         {
           executablePath: this.config.chromiumExecutablePath,
-          headless: true,
-          args: ["--no-sandbox", "--disable-dev-shm-usage"],
+          headless: this.resolveBrowserHeadless(),
+          args: this.resolveChromiumLaunchArgs(),
           viewport: { width: 1400, height: 960 },
         },
       )
@@ -345,6 +384,21 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         options,
       )
       if (flowResult.status !== "ready") {
+        const manualPage = await this.waitForManualLoginCompletion(
+          page,
+          account,
+          profile,
+          options,
+        )
+        if (manualPage) {
+          return await this.performBrowserSessionCheckin(
+            manualPage,
+            account,
+            profile,
+            options,
+          )
+        }
+
         const now = Date.now()
         return {
           accountId: account.id,
@@ -1422,10 +1476,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               options,
               "尝试从页面中提取 Turnstile token 并手动补发第二次签到请求",
             )
-            const manualFollowup = await this.performRunAnytimeTurnstileFollowup(
+            const manualFollowup = await this.resolveRunAnytimeTurnstileFollowup(
               page,
               account,
               browserResponse.requestUrl,
+              options,
             )
             if (manualFollowup) {
               browserResponse = manualFollowup
@@ -1792,18 +1847,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           options,
           "检测到 RunAnytime PoW 首次响应要求 Turnstile，尝试等待页面验证结果",
         )
-        const followupResponse = await this.performRunAnytimeTurnstileFollowup(
+        const followupResponse = await this.resolveRunAnytimeTurnstileFollowup(
           page,
           account,
           browserResult.requestUrl,
+          options,
         )
         if (followupResponse) {
-          if (followupResponse.statusCode === 0) {
-            await this.reportProgress(
-              options,
-              `RunAnytime Turnstile follow-up 诊断：${followupResponse.rawText || "<empty>"}`,
-            )
-          } else {
+          if (followupResponse.statusCode !== 0) {
             checkinResponse = {
               statusCode: followupResponse.statusCode,
               rawText: followupResponse.rawText,
@@ -1926,6 +1977,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     page: Page,
     account: SiteAccount,
     requestUrl: string,
+    preferredTurnstileToken = "",
   ): Promise<
     | {
         statusCode: number
@@ -1950,10 +2002,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           requestUrl,
           fallbackUserId,
           fallbackAccessToken,
+          preferredTurnstileToken,
         }: {
           requestUrl: string
           fallbackUserId: string
           fallbackAccessToken: string
+          preferredTurnstileToken: string
         }) => {
           const diagnostics: Record<string, unknown> = {
             phase: "init",
@@ -2233,7 +2287,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
               try {
                 diagnostics.phase = "rendering_widget"
-                const widgetId = turnstile.render(container, {
+                const render = turnstile.render
+                if (typeof render !== "function") {
+                  diagnostics.renderMissing = true
+                  finish("")
+                  return
+                }
+
+                const widgetId = render(container, {
                   sitekey: siteKey,
                   callback: (token: unknown) => {
                     finish(typeof token === "string" ? token : "")
@@ -2267,7 +2328,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             })
           }
 
-          let turnstileToken = await waitForTurnstileToken()
+          let turnstileToken = preferredTurnstileToken.trim()
+          diagnostics.preferredTokenProvided = Boolean(turnstileToken)
+          if (!turnstileToken) {
+            turnstileToken = await waitForTurnstileToken()
+          }
           if (!turnstileToken) {
             diagnostics.phase = "render_widget_needed"
             turnstileToken = await obtainTokenViaRenderedWidget()
@@ -2325,6 +2390,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           fallbackUserId:
             account.account_info.id > 0 ? String(account.account_info.id) : "",
           fallbackAccessToken: extractedAccessToken,
+          preferredTurnstileToken,
         },
       )
       .catch(() => null)
@@ -2351,6 +2417,58 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     return evaluated
+  }
+
+  private async resolveRunAnytimeTurnstileFollowup(
+    page: Page,
+    account: SiteAccount,
+    requestUrl: string,
+    options: SessionRefreshOptions,
+  ): Promise<
+    | {
+        statusCode: number
+        rawText: string
+        requestUrl: string
+        diagnostics?: Record<string, unknown>
+      }
+    | null
+  > {
+    const followupResponse = await this.performRunAnytimeTurnstileFollowup(
+      page,
+      account,
+      requestUrl,
+    )
+
+    if (!followupResponse || followupResponse.statusCode !== 0) {
+      return followupResponse
+    }
+
+    await this.reportProgress(
+      options,
+      `RunAnytime Turnstile follow-up 诊断：${followupResponse.rawText || "<empty>"}`,
+    )
+
+    const manualToken = await this.waitForManualRunAnytimeTurnstileToken(
+      page,
+      options,
+    )
+    if (!manualToken) {
+      return followupResponse
+    }
+
+    await this.reportProgress(
+      options,
+      "检测到人工完成 RunAnytime Turnstile 验证，重新提交签到请求",
+    )
+
+    return (
+      (await this.performRunAnytimeTurnstileFollowup(
+        page,
+        account,
+        requestUrl,
+        manualToken,
+      )) || followupResponse
+    )
   }
 
   private buildBrowserSessionCheckinHeaders(
@@ -2516,6 +2634,91 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       .innerText({ timeout: 2_000 })
       .catch(() => "")
     return `${title}\n${bodyText}`.toLowerCase()
+  }
+
+  private resolveBrowserHeadless(): boolean {
+    return this.config.browserHeadless ?? true
+  }
+
+  private resolveChromiumLaunchArgs(): string[] {
+    return this.config.chromiumLaunchArgs ?? ["--no-sandbox", "--disable-dev-shm-usage"]
+  }
+
+  private async waitForManualLoginCompletion(
+    page: Page,
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
+  ): Promise<Page | null> {
+    if (this.resolveBrowserHeadless()) {
+      return null
+    }
+
+    const timeoutMs = this.config.manualLoginWaitTimeoutMs ?? 300_000
+    const targetHost = new URL(account.site_url).hostname.toLowerCase()
+    await this.reportProgress(
+      options,
+      `检测到需要人工接管，请在本机浏览器完成登录或挑战；最长等待 ${Math.round(timeoutMs / 1_000)} 秒`,
+    )
+    const deadline = Date.now() + timeoutMs
+
+    while (Date.now() < deadline) {
+      if (await this.isLoginSuccess(page, targetHost, profile)) {
+        await this.reportProgress(options, "人工接管完成，继续执行后续步骤")
+        return page
+      }
+
+      await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(
+        () => undefined,
+      )
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
+    }
+
+    await this.reportProgress(options, "人工接管等待超时")
+    return null
+  }
+
+  private async waitForManualRunAnytimeTurnstileToken(
+    page: Page,
+    options: SessionRefreshOptions,
+  ): Promise<string> {
+    if (this.resolveBrowserHeadless()) {
+      return ""
+    }
+
+    const timeoutMs = this.config.manualLoginWaitTimeoutMs ?? 300_000
+    await this.reportProgress(
+      options,
+      `RunAnytime Turnstile 需要人工验证，请在本机浏览器完成挑战；最长等待 ${Math.round(timeoutMs / 1_000)} 秒`,
+    )
+
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const token = await page
+        .evaluate(() => {
+          const tokenField = document.querySelector(
+            'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]',
+          ) as HTMLInputElement | HTMLTextAreaElement | null
+          return tokenField?.value?.trim() || ""
+        })
+        .catch(() => "")
+
+      if (token) {
+        await this.reportProgress(
+          options,
+          "检测到人工完成 RunAnytime Turnstile 验证，已获取 token",
+        )
+        return token
+      }
+
+      await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(
+        () => undefined,
+      )
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
+    }
+
+    await this.reportProgress(options, "RunAnytime Turnstile 人工验证等待超时")
+    return ""
   }
 
   private async isLoginSuccess(

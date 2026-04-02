@@ -1,11 +1,13 @@
 # All API Hub
 
-当前仓库同时包含三种运行形态：
+当前仓库同时包含多种运行形态：
 
+- `packages/browser`: 浏览器站点 profile 解析与 mixed-mode 路由共享逻辑
 - `packages/core`: 共享类型、存储、导入解析、签到执行引擎
 - `packages/cli`: 本地 CLI，供 OpenClaw 或本地任务调用
 - `packages/desktop`: Electron 桌面版，负责账号管理、导入、手动登录、手动签到
 - `packages/server`: Zeabur 云端服务，负责 GitHub 仓库同步导入、Telegram 指令、Playwright 自动登录续期、云端批量签到
+- `packages/worker`: 本地常驻浏览器 worker，接管需要真实浏览器的签到与会话刷新
 
 ## 开发
 
@@ -20,8 +22,10 @@ npm run test
 ```bash
 npm run dev:desktop
 npm run dev:server
+npm run dev:worker
 npm run start:desktop
 npm run start:server
+npm run start:worker
 ```
 
 ## 本地 CLI
@@ -79,6 +83,7 @@ npm run release:desktop
 完整部署说明见 [docs/zeabur-server-deployment.md](/E:/all-api-hub/docs/zeabur-server-deployment.md)。
 配置模板见 [packages/server/.env.example](/E:/all-api-hub/packages/server/.env.example) 和 [examples/site-login-profiles.example.json](/E:/all-api-hub/examples/site-login-profiles.example.json)。
 Zeabur 可直接复制的配置清单见 [docs/zeabur-secrets.example.txt](/E:/all-api-hub/docs/zeabur-secrets.example.txt) 和 [docs/zeabur-env.example.txt](/E:/all-api-hub/docs/zeabur-env.example.txt)。
+本地浏览器 worker 的启动说明见 [docs/local-browser-worker.md](/E:/all-api-hub/docs/local-browser-worker.md) 和 [packages/worker/.env.example](/E:/all-api-hub/packages/worker/.env.example)。
 
 服务启动：
 
@@ -120,6 +125,7 @@ TG_BOT_TOKEN
 TG_WEBHOOK_SECRET
 TG_ADMIN_CHAT_ID
 INTERNAL_ADMIN_TOKEN
+LOCAL_WORKER_TOKEN
 GITHUB_USERNAME
 GITHUB_PASSWORD
 GITHUB_TOTP_SECRET
@@ -141,6 +147,7 @@ TZ=Asia/Shanghai
 - PostgreSQL 只存账号、设置、签到运行记录和账号签到状态
 - `/data/all-api-hub/profiles/cloud/linuxdo-github` 继续保存共享 SSO 浏览器 profile
 - `/data/all-api-hub/diagnostics` 继续保存截图和诊断文件
+- `LOCAL_WORKER_TOKEN` 仅用于本地 worker 领取、心跳、进度与完成回传，不复用 `INTERNAL_ADMIN_TOKEN`
 - 容器内如果使用系统 Chromium，请设置 `CHROMIUM_PATH=/usr/bin/chromium`
 - `SITE_LOGIN_PROFILES_JSON` 首轮部署可以先填 `{}`，这样服务可正常启动，只是暂不启用站点自动续期
 - 更推荐把 `site-login-profiles.json` 放进私有数据仓库，再通过 `SITE_LOGIN_PROFILES_REPO_PATH` 在启动时自动加载
@@ -150,7 +157,7 @@ TZ=Asia/Shanghai
 推荐的 Zeabur Secret / Env 分组：
 
 - Secret:
-  `DATABASE_URL` 或 `POSTGRES_CONNECTION_STRING`、`TG_BOT_TOKEN`、`TG_WEBHOOK_SECRET`、`TG_ADMIN_CHAT_ID`、`INTERNAL_ADMIN_TOKEN`、`GITHUB_USERNAME`、`GITHUB_PASSWORD`、`GITHUB_TOTP_SECRET`、`IMPORT_GITHUB_PAT`、`SITE_LOGIN_PROFILES_JSON={}`
+  `DATABASE_URL` 或 `POSTGRES_CONNECTION_STRING`、`TG_BOT_TOKEN`、`TG_WEBHOOK_SECRET`、`TG_ADMIN_CHAT_ID`、`INTERNAL_ADMIN_TOKEN`、`LOCAL_WORKER_TOKEN`、`GITHUB_USERNAME`、`GITHUB_PASSWORD`、`GITHUB_TOTP_SECRET`、`IMPORT_GITHUB_PAT`、`SITE_LOGIN_PROFILES_JSON={}`
 - Env:
   `ALL_API_HUB_DATA_DIR=/data/all-api-hub`、`CHROMIUM_PATH=/usr/bin/chromium`、`LINUXDO_BASE_URL=https://linux.do`、`IMPORT_REPO_OWNER=jctn`、`IMPORT_REPO_NAME=all-api-hub-cloud`、`IMPORT_REPO_PATH=all-api-hub-backup-2026-03-19.json`、`IMPORT_REPO_REF=main`、`SITE_LOGIN_PROFILES_REPO_PATH=site-login-profiles.json`、`TZ=Asia/Shanghai`
 
@@ -162,6 +169,7 @@ TG_BOT_TOKEN=<BotFather token>
 TG_WEBHOOK_SECRET=<random 48-64 chars>
 TG_ADMIN_CHAT_ID=<your telegram private chat id>
 INTERNAL_ADMIN_TOKEN=<random 48-64 chars>
+LOCAL_WORKER_TOKEN=<random 48-64 chars>
 GITHUB_USERNAME=<your github username>
 GITHUB_PASSWORD=<your github password>
 GITHUB_TOTP_SECRET=<your github totp setup key>
@@ -188,6 +196,7 @@ TZ=Asia/Shanghai
 ```json
 {
   "demo.example.com": {
+    "executionMode": "local-browser",
     "loginPath": "/auth/login",
     "loginButtonSelectors": [
       "button[data-provider='linuxdo']",
@@ -199,6 +208,8 @@ TZ=Asia/Shanghai
   }
 }
 ```
+
+如果某个 hostname 的 `executionMode` 被设成 `"local-browser"`，该站点的浏览器签到和浏览器会话刷新都会改由本地 worker 执行；云端只负责 TG 指令、任务编排和结果汇总。
 
 如果你把站点 profile 文件放在私有数据仓库中，推荐直接设置：
 
@@ -227,9 +238,35 @@ SITE_LOGIN_PROFILES_REPO_PATH=site-login-profiles.json
 https://<your-zeabur-domain>/telegram/webhook
 ```
 
+## 本地浏览器 Worker
+
+mixed-mode 下，云端继续接收 `/checkin`、`/checkin_all`、`/auth_refresh`，但命中 `executionMode: "local-browser"` 的站点会被路由到本地真实浏览器 worker。
+
+worker 运行特征：
+
+- 空闲时只做轻量轮询和心跳，不常驻浏览器
+- 执行任务时才启动本机可见 Chromium
+- 浏览器实时会话只保存在本地 runtime，不回写云端 cookie/token
+- 遇到 Cloudflare / Turnstile / 手动登录时，浏览器窗口会保留给本机人工接管
+
+本地启动前至少要准备：
+
+- Zeabur server 已配置 `LOCAL_WORKER_TOKEN`
+- 本地已准备 `ALL_API_HUB_PRIVATE_DATA_DIR`
+- `site-login-profiles.json` 中目标站点已标记 `executionMode: "local-browser"`
+
+启动示例：
+
+```bash
+npm run build --workspace @all-api-hub/browser --workspace @all-api-hub/core --workspace @all-api-hub/server --workspace @all-api-hub/worker
+npm run start:worker
+```
+
+更完整的环境变量与运行说明见 [docs/local-browser-worker.md](/E:/all-api-hub/docs/local-browser-worker.md)。
+
 ## Docker
 
-仓库根目录已经提供 `Dockerfile`，用于构建 `core + server`，不会构建 Electron 桌面版。
+仓库根目录已经提供 `Dockerfile`，用于构建 `browser + core + server`，不会构建 Electron 桌面版，也不会在镜像内启动本地 worker。
 
 ## 打包产物
 

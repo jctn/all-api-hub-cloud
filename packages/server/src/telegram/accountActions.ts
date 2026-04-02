@@ -2,8 +2,8 @@ import { CheckinResultStatus, type CheckinAccountResult } from "@all-api-hub/cor
 
 import type {
   BatchCheckinRunResult,
-  CheckinOrchestrator,
 } from "../checkin/orchestrator.js"
+import type { CheckinExecutionController } from "../localWorker/hybridOrchestrator.js"
 
 function isAuthInvalidFailure(result: CheckinAccountResult | undefined): boolean {
   return (
@@ -14,7 +14,7 @@ function isAuthInvalidFailure(result: CheckinAccountResult | undefined): boolean
 
 export async function runSingleAccountCheckinWithAuthFallback(
   account: Pick<{ id: string; site_name: string }, "id" | "site_name">,
-  orchestrator: Pick<CheckinOrchestrator, "runCheckinBatch" | "refreshSessions">,
+  orchestrator: Pick<CheckinExecutionController, "runCheckinBatch" | "refreshSessions">,
   options: {
     onProgress?: (message: string) => Promise<void> | void
   } = {},

@@ -4,10 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "workspaces": [
+    "packages/browser",
     "packages/core",
     "packages/cli",
     "packages/desktop",
-    "packages/server"
+    "packages/server",
+    "packages/worker"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
@@ -16,6 +18,8 @@
     "start:desktop": "npm run start --workspace @all-api-hub/desktop",
     "dev:server": "npm run dev --workspace @all-api-hub/server",
     "start:server": "npm run start --workspace @all-api-hub/server",
+    "dev:worker": "npm run dev --workspace @all-api-hub/worker",
+    "start:worker": "npm run start --workspace @all-api-hub/worker",
     "checkin": "npm run dev --workspace @all-api-hub/cli --",
     "clean:desktop": "npm run clean --workspace @all-api-hub/desktop",
     "release:desktop": "npm run clean:desktop && npm run build && npm run dist:win --workspace @all-api-hub/desktop"

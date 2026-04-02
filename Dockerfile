@@ -7,8 +7,10 @@ FROM base AS deps
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 COPY package.json package-lock.json pnpm-workspace.yaml tsconfig.base.json vitest.config.ts ./
+COPY packages/browser/package.json packages/browser/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/server/package.json packages/server/package.json
+COPY packages/worker/package.json packages/worker/package.json
 
 RUN npm ci
 
@@ -25,6 +27,7 @@ ARG GIT_COMMIT_MESSAGE
 ARG ZEABUR_SERVICE_NAME
 ARG TZ=Asia/Shanghai
 
+COPY packages/browser packages/browser
 COPY packages/core packages/core
 COPY packages/server packages/server
 
@@ -38,6 +41,8 @@ ENV NODE_ENV=production
 ENV PORT=3000
 
 COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages/browser/package.json ./packages/browser/package.json
+COPY --from=build /app/packages/browser/dist ./packages/browser/dist
 COPY --from=build /app/packages/core/package.json ./packages/core/package.json
 COPY --from=build /app/packages/core/dist ./packages/core/dist
 COPY --from=build /app/packages/server/package.json ./packages/server/package.json

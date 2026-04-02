@@ -1214,6 +1214,154 @@ describe("PlaywrightSiteSessionService", () => {
     expect(progress).toContain("检测到 RunAnytime PoW 首次响应要求 Turnstile，尝试等待页面验证结果")
   })
 
+  it("waits for manual runanytime turnstile completion and retries the follow-up request", async () => {
+    const progress: string[] = []
+    const followupTokens: string[] = []
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      {
+        ...baseConfig,
+        browserHeadless: false,
+        manualLoginWaitTimeoutMs: 5_000,
+      },
+      async () => {
+        throw new Error("unexpected node fetch call")
+      },
+    )
+
+    ;(
+      service as unknown as {
+        performRunAnytimeTurnstileFollowup: (
+          page: unknown,
+          account: SiteAccount,
+          requestUrl: string,
+          preferredTurnstileToken?: string,
+        ) => Promise<{ statusCode: number; rawText: string; requestUrl: string } | null>
+      }
+    ).performRunAnytimeTurnstileFollowup = async (
+      _page,
+      _account,
+      requestUrl,
+      preferredTurnstileToken = "",
+    ) => {
+      followupTokens.push(preferredTurnstileToken)
+      if (!preferredTurnstileToken) {
+        return {
+          statusCode: 0,
+          rawText: "phase=widget_rendered | finalTokenLength=0",
+          requestUrl,
+        }
+      }
+
+      return {
+        statusCode: 200,
+        rawText: JSON.stringify({
+          success: true,
+          message: "签到成功",
+          data: {
+            quota_awarded: 4200000,
+          },
+        }),
+        requestUrl: `${requestUrl}&turnstile=${preferredTurnstileToken}`,
+      }
+    }
+
+    ;(
+      service as unknown as {
+        waitForManualRunAnytimeTurnstileToken: (
+          page: unknown,
+          options: { onProgress?: (message: string) => void | Promise<void> },
+        ) => Promise<string>
+      }
+    ).waitForManualRunAnytimeTurnstileToken = async (_page, options) => {
+      await options.onProgress?.("请在本机浏览器完成 RunAnytime Turnstile 验证")
+      return "manual-turnstile-token"
+    }
+
+    const page = {
+      url() {
+        return "https://runanytime.hxi.me/console/personal"
+      },
+      async evaluate(_fn: unknown, arg?: unknown) {
+        if (Array.isArray(arg)) {
+          return ""
+        }
+        return {
+          challenge: {
+            statusCode: 200,
+            rawText: JSON.stringify({
+              success: true,
+              data: {
+                challenge_id: "abc",
+                prefix: "pow-prefix",
+                difficulty: 1,
+              },
+            }),
+            payload: {
+              success: true,
+              data: {
+                challenge_id: "abc",
+                prefix: "pow-prefix",
+                difficulty: 1,
+              },
+            },
+          },
+          solved: {
+            nonce: "00000001",
+            attempts: 2,
+          },
+          requestUrl:
+            "https://runanytime.hxi.me/api/user/checkin?pow_challenge=abc&pow_nonce=00000001",
+          checkin: {
+            statusCode: 200,
+            rawText: JSON.stringify({
+              success: false,
+              message: "Turnstile token 为空",
+            }),
+            payload: {
+              success: false,
+              message: "Turnstile token 为空",
+            },
+          },
+        }
+      },
+    }
+
+    const result = await (service as unknown as {
+      performRunAnytimePowCheckin: (
+        page: typeof page,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<{
+        status: CheckinResultStatus
+        message: string
+      }>
+    }).performRunAnytimePowCheckin(
+      page,
+      {
+        ...baseAccount,
+        site_name: "随时跑路公益站",
+        site_url: "https://runanytime.hxi.me",
+      },
+      {
+        ...baseProfile,
+        hostname: "runanytime.hxi.me",
+      },
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(result.status).toBe(CheckinResultStatus.Success)
+    expect(result.message).toContain("签到成功")
+    expect(followupTokens).toEqual(["", "manual-turnstile-token"])
+    expect(progress).toContain("请在本机浏览器完成 RunAnytime Turnstile 验证")
+  })
+
   it("renders a runanytime turnstile widget in-page when no token field is present yet", async () => {
     const service = new PlaywrightSiteSessionService(
       {} as StorageRepository,

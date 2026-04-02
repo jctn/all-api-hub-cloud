@@ -1,5 +1,5 @@
 {
-  "name": "@all-api-hub/server",
+  "name": "@all-api-hub/worker",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,10 +18,6 @@
   "dependencies": {
     "@all-api-hub/browser": "0.1.0",
     "@all-api-hub/core": "0.1.0",
-    "fastify": "^5.6.0",
-    "grammy": "^1.38.2",
-    "otplib": "^12.0.1",
-    "pg": "^8.16.3",
-    "playwright": "^1.56.1"
+    "@all-api-hub/server": "0.1.0"
   }
 }

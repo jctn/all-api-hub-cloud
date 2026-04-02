@@ -45,6 +45,7 @@ export interface ServerConfig {
   sharedSsoProfileDirectory: string
   chromiumExecutablePath?: string
   internalAdminToken: string
+  localWorkerToken: string
   telegram: TelegramConfig
   importRepo: ImportRepoConfig
   github: GitHubSsoConfig
@@ -149,6 +150,7 @@ export function loadServerConfig(
     ),
     chromiumExecutablePath: env.CHROMIUM_PATH?.trim() || undefined,
     internalAdminToken: requiredEnv(env, "INTERNAL_ADMIN_TOKEN"),
+    localWorkerToken: requiredEnv(env, "LOCAL_WORKER_TOKEN"),
     telegram: {
       botToken: requiredEnv(env, "TG_BOT_TOKEN"),
       webhookSecret: requiredEnv(env, "TG_WEBHOOK_SECRET"),

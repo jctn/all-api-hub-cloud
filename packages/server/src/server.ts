@@ -20,9 +20,43 @@ import { createTelegramBot } from "./telegram/bot.js"
 import { runMigrations, type MigrationResult } from "./storage/migrations.js"
 import { PostgresRepository } from "./storage/postgresRepository.js"
 import { PostgresAdvisoryLockProvider } from "./storage/advisoryLock.js"
+import { PollingLocalWorkerExecutionGateway } from "./localWorker/gateway.js"
+import { HybridCheckinOrchestrator } from "./localWorker/hybridOrchestrator.js"
+import {
+  InMemoryLocalWorkerTaskStore,
+  type CreateLocalWorkerTaskInput,
+  type FinishLocalWorkerTaskInput,
+  type LocalWorkerTaskStore,
+  type UpdateLocalWorkerTaskProgressInput,
+} from "./localWorker/taskStore.js"
+import { PostgresLocalWorkerTaskStore } from "./localWorker/postgresTaskStore.js"
 
 interface InternalRequestBody {
   accountId?: string
+}
+
+interface LocalWorkerClaimBody {
+  workerId?: string
+  claimedAt?: number
+}
+
+interface LocalWorkerHeartbeatBody {
+  workerId?: string
+  heartbeatAt?: number
+}
+
+interface LocalWorkerProgressBody extends LocalWorkerHeartbeatBody {
+  status?: "running" | "waiting_manual"
+  progressText?: string
+}
+
+interface LocalWorkerFinishBody {
+  workerId?: string
+  status?: "succeeded" | "failed" | "expired"
+  finishedAt?: number
+  resultJson?: unknown
+  errorCode?: string
+  errorMessage?: string
 }
 
 export interface BuildServerOptions {
@@ -30,6 +64,7 @@ export interface BuildServerOptions {
   repository?: StorageRepository
   fetchImpl?: typeof fetch
   taskCoordinator?: TaskCoordinator
+  localWorkerTaskStore?: LocalWorkerTaskStore
   telegramBotInfo?: UserFromGetMe
 }
 
@@ -52,6 +87,7 @@ export async function buildServer(
   )
   let repository = options.repository
   let taskCoordinator = options.taskCoordinator
+  let localWorkerTaskStore = options.localWorkerTaskStore
   let storageMode = "filesystem"
   let migrationResult: MigrationResult = {
     appliedMigrationIds: [],
@@ -80,12 +116,22 @@ export async function buildServer(
       : new TaskCoordinator()
   }
 
+  if (!localWorkerTaskStore) {
+    localWorkerTaskStore = ownedPool
+      ? new PostgresLocalWorkerTaskStore(ownedPool)
+      : new InMemoryLocalWorkerTaskStore()
+  }
+
   if (!repository) {
     throw new Error("Repository initialization failed")
   }
 
   if (!taskCoordinator) {
     throw new Error("Task coordinator initialization failed")
+  }
+
+  if (!localWorkerTaskStore) {
+    throw new Error("Local worker task store initialization failed")
   }
 
   await repository.initialize()
@@ -96,12 +142,24 @@ export async function buildServer(
     config,
     fetchImpl,
   )
-  const orchestrator = new CheckinOrchestrator(
+  const cloudOrchestrator = new CheckinOrchestrator(
     repository,
     config,
     sessionRefresher,
     fetchImpl,
   )
+  const localWorkerGateway = new PollingLocalWorkerExecutionGateway({
+    taskStore: localWorkerTaskStore,
+    pollIntervalMs: 1_000,
+    claimTimeoutMs: 45_000,
+    heartbeatTimeoutMs: 90_000,
+  })
+  const orchestrator = new HybridCheckinOrchestrator({
+    repository,
+    siteLoginProfiles: config.siteLoginProfiles,
+    cloud: cloudOrchestrator,
+    localWorker: localWorkerGateway,
+  })
 
   const app = Fastify({
     logger: true,
@@ -140,6 +198,19 @@ export async function buildServer(
     }
   }
 
+  const requireLocalWorkerAuth = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => {
+    const token = parseBearerToken(request.headers.authorization)
+    if (token !== config.localWorkerToken) {
+      return await reply.code(401).send({
+        ok: false,
+        error: "unauthorized",
+      })
+    }
+  }
+
   app.get("/internal/healthz", async () => ({
     ok: true,
     version: config.deploymentVersion,
@@ -171,6 +242,171 @@ export async function buildServer(
     )
     return await reply.send({ ok: true })
   })
+
+  app.post(
+    "/internal/worker/tasks/enqueue",
+    { preHandler: requireInternalAuth },
+    async (request, reply) => {
+      const body = (request.body ?? {}) as Partial<CreateLocalWorkerTaskInput>
+      const payload = body.payload
+      if (
+        !body.kind ||
+        !body.scope ||
+        !body.requestedBy ||
+        !payload ||
+        !Array.isArray(payload.accountIds) ||
+        !Array.isArray(payload.accounts)
+      ) {
+        return await reply.code(400).send({
+          ok: false,
+          error: "invalid_local_worker_task",
+        })
+      }
+
+      const task = await localWorkerTaskStore.enqueue({
+        kind: body.kind,
+        scope: body.scope,
+        requestedBy: body.requestedBy,
+        chatId: body.chatId,
+        verbose: Boolean(body.verbose),
+        requestedAt: body.requestedAt,
+        payload: {
+          ...payload,
+          accountIds: payload.accountIds,
+          accounts: payload.accounts,
+        },
+      })
+
+      return await reply.send({ ok: true, task })
+    },
+  )
+
+  app.post(
+    "/internal/worker/tasks/claim",
+    { preHandler: requireLocalWorkerAuth },
+    async (request, reply) => {
+      const body = (request.body ?? {}) as LocalWorkerClaimBody
+      const workerId = body.workerId?.trim()
+      if (!workerId) {
+        return await reply.code(400).send({
+          ok: false,
+          error: "missing_worker_id",
+        })
+      }
+
+      const task = await localWorkerTaskStore.claimNext(workerId, body.claimedAt)
+      return await reply.send({ ok: true, task })
+    },
+  )
+
+  app.post(
+    "/internal/worker/tasks/:taskId/heartbeat",
+    { preHandler: requireLocalWorkerAuth },
+    async (request, reply) => {
+      const taskId = String((request.params as { taskId?: string }).taskId ?? "")
+      const body = (request.body ?? {}) as LocalWorkerHeartbeatBody
+      const workerId = body.workerId?.trim()
+      if (!taskId || !workerId) {
+        return await reply.code(400).send({
+          ok: false,
+          error: "missing_task_or_worker_id",
+        })
+      }
+
+      try {
+        const task = await localWorkerTaskStore.heartbeat(
+          taskId,
+          workerId,
+          body.heartbeatAt,
+        )
+        if (!task) {
+          return await reply.code(404).send({ ok: false, error: "task_not_found" })
+        }
+        return await reply.send({ ok: true, task })
+      } catch (error) {
+        return await reply.code(409).send({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    },
+  )
+
+  app.post(
+    "/internal/worker/tasks/:taskId/progress",
+    { preHandler: requireLocalWorkerAuth },
+    async (request, reply) => {
+      const taskId = String((request.params as { taskId?: string }).taskId ?? "")
+      const body = (request.body ?? {}) as LocalWorkerProgressBody
+      const workerId = body.workerId?.trim()
+      if (!taskId || !workerId) {
+        return await reply.code(400).send({
+          ok: false,
+          error: "missing_task_or_worker_id",
+        })
+      }
+
+      const input: UpdateLocalWorkerTaskProgressInput = {
+        status: body.status,
+        progressText: body.progressText,
+        heartbeatAt: body.heartbeatAt,
+      }
+
+      try {
+        const task = await localWorkerTaskStore.updateProgress(
+          taskId,
+          workerId,
+          input,
+        )
+        if (!task) {
+          return await reply.code(404).send({ ok: false, error: "task_not_found" })
+        }
+        return await reply.send({ ok: true, task })
+      } catch (error) {
+        return await reply.code(409).send({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    },
+  )
+
+  app.post(
+    "/internal/worker/tasks/:taskId/finish",
+    { preHandler: requireLocalWorkerAuth },
+    async (request, reply) => {
+      const taskId = String((request.params as { taskId?: string }).taskId ?? "")
+      const body = (request.body ?? {}) as LocalWorkerFinishBody
+      const workerId = body.workerId?.trim()
+      if (!taskId || !workerId || !body.status) {
+        return await reply.code(400).send({
+          ok: false,
+          error: "missing_task_worker_or_status",
+        })
+      }
+
+      const input: FinishLocalWorkerTaskInput = {
+        status: body.status,
+        finishedAt: body.finishedAt,
+        resultJson: body.resultJson,
+        errorCode: body.errorCode,
+        errorMessage: body.errorMessage,
+      }
+
+      try {
+        const task = await localWorkerTaskStore.finish(taskId, workerId, input)
+        if (!task) {
+          return await reply.code(404).send({ ok: false, error: "task_not_found" })
+        }
+        return await reply.send({ ok: true, task })
+      } catch (error) {
+        return await reply.code(409).send({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    },
+  )
 
   app.post(
     "/internal/import/sync",
