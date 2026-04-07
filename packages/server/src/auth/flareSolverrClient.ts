@@ -25,16 +25,26 @@ export interface FlareSolverrResult {
   userAgent: string
 }
 
-const REQUEST_TIMEOUT_MS = 90_000
+export interface SolveCloudflareChallengeOptions {
+  maxTimeoutMs?: number
+  requestTimeoutMs?: number
+}
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 90_000
+const DEFAULT_MAX_TIMEOUT_MS = 60_000
 
 export async function solveCloudflareChallenge(
   serviceUrl: string,
   targetUrl: string,
   fetchImpl: typeof fetch = fetch,
   onLog?: (msg: string) => void,
+  options?: SolveCloudflareChallengeOptions,
 ): Promise<FlareSolverrResult | null> {
   const log = onLog ?? (() => {})
   const endpoint = `${serviceUrl.replace(/\/+$/, "")}/v1`
+  const maxTimeoutMs = options?.maxTimeoutMs ?? DEFAULT_MAX_TIMEOUT_MS
+  const requestTimeoutMs =
+    options?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
 
   log(`POST ${endpoint} url=${targetUrl}`)
   try {
@@ -47,9 +57,9 @@ export async function solveCloudflareChallenge(
       body: JSON.stringify({
         cmd: "request.get",
         url: targetUrl,
-        maxTimeout: 60_000,
+        maxTimeout: maxTimeoutMs,
       }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(requestTimeoutMs),
     })
 
     if (!res.ok) {

@@ -4,6 +4,8 @@ import {
   AuthType,
   CheckinResultStatus,
   HealthState,
+  joinUrl,
+  resolveCheckInPath,
   type SiteAccount,
   type StorageRepository,
 } from "@all-api-hub/core"
@@ -2087,6 +2089,370 @@ describe("PlaywrightSiteSessionService", () => {
       expect(closed).toBe(false)
     } finally {
       launchSpy.mockRestore()
+    }
+  })
+
+  ;[
+    {
+      label: "local flaresolverr is disabled",
+      profile: {
+        ...baseProfile,
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "prewarm",
+          flareSolverrScope: "root",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: true,
+          manualFallbackPolicy: "disabled",
+        },
+      } as SiteLoginProfile,
+      localFlareSolverr: {
+        enabled: false,
+        url: "http://127.0.0.1:8191",
+        timeoutMs: 90_000,
+      },
+    },
+    {
+      label: "profile cloudflareMode is not prewarm",
+      profile: {
+        ...baseProfile,
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "off",
+          flareSolverrScope: "root",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: true,
+          manualFallbackPolicy: "disabled",
+        },
+      } as SiteLoginProfile,
+      localFlareSolverr: {
+        enabled: true,
+        url: "http://127.0.0.1:8191",
+        timeoutMs: 90_000,
+      },
+    },
+    {
+      label: "execution mode is not local-browser",
+      profile: {
+        ...baseProfile,
+        executionMode: "cloud",
+      } as SiteLoginProfile,
+      localFlareSolverr: {
+        enabled: true,
+        url: "http://127.0.0.1:8191",
+        timeoutMs: 90_000,
+      },
+    },
+  ].forEach(({ label, profile, localFlareSolverr }) => {
+    it(`does not prewarm when ${label}`, async () => {
+      const progress: string[] = []
+      const prewarmCalls: string[] = []
+
+      const page = {
+        url() {
+          return "about:blank"
+        },
+        async goto() {
+          return undefined
+        },
+        async screenshot() {
+          return undefined
+        },
+      }
+
+      const context = {
+        pages() {
+          return [page]
+        },
+        async newPage() {
+          return page
+        },
+        async close() {
+          return undefined
+        },
+      }
+
+      const launchSpy = vi
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context as never)
+
+      try {
+        const service = new PlaywrightSiteSessionService(
+          {} as StorageRepository,
+          {
+            ...baseConfig,
+            browserHeadless: false,
+            flareSolverrUrl: "http://127.0.0.1:8191",
+            localFlareSolverr,
+            siteLoginProfiles: {
+              "demo.example.com": {
+                hostname: "demo.example.com",
+                ...profile,
+              },
+            },
+          } as ServerConfig & {
+            localFlareSolverr: {
+              enabled: boolean
+              url: string | null
+              timeoutMs: number
+            }
+          },
+        )
+
+        ;(
+          service as unknown as {
+            prewarmLocalBrowserChallenge: () => Promise<null>
+            completeLoginFlow: () => Promise<{ status: "ready"; page: typeof page }>
+            performBrowserSessionCheckin: () => Promise<CheckinAccountResult>
+          }
+        ).prewarmLocalBrowserChallenge = async () => {
+          prewarmCalls.push("called")
+          return null
+        }
+        ;(
+          service as unknown as {
+            completeLoginFlow: () => Promise<{ status: "ready"; page: typeof page }>
+            performBrowserSessionCheckin: () => Promise<CheckinAccountResult>
+          }
+        ).completeLoginFlow = async () => ({ status: "ready", page })
+        ;(
+          service as unknown as {
+            performBrowserSessionCheckin: () => Promise<CheckinAccountResult>
+          }
+        ).performBrowserSessionCheckin = async () =>
+          ({
+            accountId: "acc-local",
+            siteName: "Demo",
+            siteUrl: "https://demo.example.com",
+            siteType: "new-api",
+            status: CheckinResultStatus.Success,
+            code: "ok",
+            message: "ok",
+            startedAt: Date.now(),
+            completedAt: Date.now(),
+            checkInUrl: "https://demo.example.com/console/personal",
+          }) as CheckinAccountResult
+
+        await service.checkInWithBrowserSession(
+          {
+            ...baseAccount,
+            id: "acc-local",
+            site_name: "Demo",
+            site_url: "https://demo.example.com",
+          },
+          {
+            onProgress(message) {
+              progress.push(message)
+            },
+          },
+        )
+
+        expect(prewarmCalls).toHaveLength(0)
+        expect(progress).not.toContain("命中本地 FlareSolverr 预热策略")
+      } finally {
+        launchSpy.mockRestore()
+      }
+    })
+  })
+
+  it("builds local flaresolverr target urls from scope and explicit target path", () => {
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+    )
+    const account = {
+      ...baseAccount,
+      site_url: "https://demo.example.com",
+    }
+
+    const buildTargetUrl = (
+      profile: SiteLoginProfile,
+    ): string =>
+      (
+        service as unknown as {
+          buildLocalFlareSolverrTargetUrl: (
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+          ) => string
+        }
+      ).buildLocalFlareSolverrTargetUrl(account, profile)
+
+    expect(
+      buildTargetUrl({
+        ...baseProfile,
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "prewarm",
+          flareSolverrScope: "root",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: true,
+          manualFallbackPolicy: "disabled",
+        },
+      } as SiteLoginProfile),
+    ).toBe(joinUrl(account.site_url, "/"))
+
+    expect(
+      buildTargetUrl({
+        ...baseProfile,
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "prewarm",
+          flareSolverrScope: "login",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: true,
+          manualFallbackPolicy: "disabled",
+        },
+      } as SiteLoginProfile),
+    ).toBe(joinUrl(account.site_url, baseProfile.loginPath))
+
+    expect(
+      buildTargetUrl({
+        ...baseProfile,
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "prewarm",
+          flareSolverrScope: "checkin",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: true,
+          manualFallbackPolicy: "disabled",
+        },
+      } as SiteLoginProfile),
+    ).toBe(joinUrl(account.site_url, resolveCheckInPath(account.site_type)))
+
+    expect(
+      buildTargetUrl({
+        ...baseProfile,
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "prewarm",
+          flareSolverrScope: "root",
+          flareSolverrTargetPath: "/cf-probe",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: true,
+          manualFallbackPolicy: "disabled",
+        },
+      } as SiteLoginProfile),
+    ).toBe(joinUrl(account.site_url, "/cf-probe"))
+  })
+
+  it("passes local flaresolverr timeout and injects cookies and user agent during prewarm", async () => {
+    const addedCookies: Array<Record<string, unknown>> = []
+    let requestBody: Record<string, unknown> | null = null
+    let extraHeaders: Record<string, string> | null = null
+
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(new AbortController().signal)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          localFlareSolverr: {
+            enabled: true,
+            url: "http://127.0.0.1:8191",
+            timeoutMs: 12_345,
+          },
+        } as ServerConfig & {
+          localFlareSolverr: {
+            enabled: boolean
+            url: string | null
+            timeoutMs: number
+          }
+        },
+        async (_input, init) => {
+          requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>
+          return new Response(
+            JSON.stringify({
+              status: "ok",
+              solution: {
+                cookies: [
+                  {
+                    name: "cf_clearance",
+                    value: "clear-123",
+                    domain: "demo.example.com",
+                    path: "/",
+                    expires: -1,
+                    httpOnly: true,
+                    secure: true,
+                    sameSite: "Lax",
+                  },
+                ],
+                userAgent: "ua-local-prewarm",
+              },
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+              },
+            },
+          )
+        },
+      )
+
+      const page = {
+        async setExtraHTTPHeaders(headers: Record<string, string>) {
+          extraHeaders = headers
+        },
+      }
+      const context = {
+        pages() {
+          return [page]
+        },
+        async newPage() {
+          return page
+        },
+        async addCookies(cookies: Array<Record<string, unknown>>) {
+          addedCookies.push(...cookies)
+        },
+      }
+
+      const result = await (
+        service as unknown as {
+          prewarmLocalBrowserChallenge: (
+            context: typeof context,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{ appliedCookies: number; userAgent: string | null } | null>
+        }
+      ).prewarmLocalBrowserChallenge(
+        context,
+        {
+          ...baseAccount,
+          site_url: "https://demo.example.com",
+        },
+        {
+          ...baseProfile,
+          executionMode: "local-browser",
+          localBrowser: {
+            cloudflareMode: "prewarm",
+            flareSolverrScope: "checkin",
+            allowRetryAfterBrowserChallenge: true,
+            openRootBeforeCheckin: true,
+            manualFallbackPolicy: "disabled",
+          },
+        } as SiteLoginProfile,
+        {},
+      )
+
+      expect(timeoutSpy).toHaveBeenCalledWith(12_345)
+      expect(requestBody?.maxTimeout).toBe(12_345)
+      expect(requestBody?.url).toBe("https://demo.example.com/console/personal")
+      expect(addedCookies).toHaveLength(1)
+      expect(addedCookies[0]).toMatchObject({
+        name: "cf_clearance",
+        value: "clear-123",
+      })
+      expect(extraHeaders).toEqual({ "User-Agent": "ua-local-prewarm" })
+      expect(result).toEqual({
+        appliedCookies: 1,
+        userAgent: "ua-local-prewarm",
+      })
+    } finally {
+      timeoutSpy.mockRestore()
     }
   })
 

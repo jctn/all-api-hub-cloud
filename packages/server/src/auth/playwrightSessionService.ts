@@ -2772,6 +2772,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         targetUrl,
         this.fetchImpl,
         (msg) => this.reportProgress(options, `[本地 FlareSolverr] ${msg}`),
+        this.config.localFlareSolverr
+          ? {
+              maxTimeoutMs: this.config.localFlareSolverr.timeoutMs,
+              requestTimeoutMs: this.config.localFlareSolverr.timeoutMs,
+            }
+          : undefined,
       )
 
       if (!result) {
