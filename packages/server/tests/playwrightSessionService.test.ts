@@ -16,7 +16,7 @@ import {
   parseSiteLoginProfiles,
   type SiteLoginProfile,
 } from "../src/auth/siteLoginProfiles.js"
-import { chromium } from "playwright"
+import { chromium, type Page } from "playwright"
 
 const baseAccount: SiteAccount = {
   id: "acc-1",
@@ -3396,6 +3396,260 @@ describe("PlaywrightSiteSessionService", () => {
       expect(prewarmCalls).toHaveLength(1)
       expect(progress).toContain("命中本地 FlareSolverr 预热策略")
       expect(timeline[0]).toBe("prewarm")
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
+  it("only performs one extra prewarm when the browser flow hits Cloudflare again", async () => {
+    const progress: string[] = []
+    let rewarmCalls = 0
+    const page = {
+      url() {
+        return "https://demo.example.com/login"
+      },
+      async goto() {
+        return undefined
+      },
+      async title() {
+        return "Demo Login"
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      {
+        ...baseConfig,
+        localFlareSolverr: {
+          enabled: true,
+          url: "http://127.0.0.1:8191",
+          timeoutMs: 90_000,
+        },
+      } as ServerConfig & {
+        localFlareSolverr: {
+          enabled: boolean
+          url: string | null
+          timeoutMs: number
+        }
+      },
+    )
+
+    ;(
+      service as unknown as {
+        findTargetPage: () => Promise<Page | null>
+        pickFlowPage: () => typeof page
+        detectCloudflareChallenge: () => Promise<boolean>
+        prewarmLocalBrowserChallenge: () => Promise<{
+          appliedCookies: number
+          userAgent: string | null
+        } | null>
+      }
+    ).findTargetPage = async () => null
+    ;(
+      service as unknown as {
+        pickFlowPage: () => typeof page
+        detectCloudflareChallenge: () => Promise<boolean>
+        prewarmLocalBrowserChallenge: () => Promise<{
+          appliedCookies: number
+          userAgent: string | null
+        } | null>
+      }
+    ).pickFlowPage = () => page
+    ;(
+      service as unknown as {
+        detectCloudflareChallenge: () => Promise<boolean>
+        prewarmLocalBrowserChallenge: () => Promise<{
+          appliedCookies: number
+          userAgent: string | null
+        } | null>
+      }
+    ).detectCloudflareChallenge = async () => true
+    ;(
+      service as unknown as {
+        prewarmLocalBrowserChallenge: () => Promise<{
+          appliedCookies: number
+          userAgent: string | null
+        } | null>
+      }
+    ).prewarmLocalBrowserChallenge = async () => {
+      rewarmCalls += 1
+      return {
+        appliedCookies: 1,
+        userAgent: "ua-local",
+      }
+    }
+
+    await (service as unknown as {
+      completeLoginFlow: (
+        context: object,
+        page: typeof page,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void },
+      ) => Promise<{ status: string; message?: string }>
+    }).completeLoginFlow(
+      {},
+      page,
+      baseAccount,
+      {
+        ...baseProfile,
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "prewarm",
+          flareSolverrScope: "root",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: false,
+          manualFallbackPolicy: "disabled",
+        },
+      } as SiteLoginProfile,
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(rewarmCalls).toBe(1)
+    expect(progress).toContain(
+      "浏览器过程中再次命中 Cloudflare，尝试一次额外预热",
+    )
+  })
+
+  it("returns cloudflare_prewarm_exhausted when the extra prewarm fails inside the browser flow", async () => {
+    const progress: string[] = []
+    let prewarmCallCount = 0
+    const page = {
+      url() {
+        return "https://demo.example.com/login"
+      },
+      async goto() {
+        return undefined
+      },
+      async title() {
+        return "Demo Login"
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+      async screenshot() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+    }
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          localFlareSolverr: {
+            enabled: true,
+            url: "http://127.0.0.1:8191",
+            timeoutMs: 90_000,
+          },
+          siteLoginProfiles: {
+            "demo.example.com": {
+              hostname: "demo.example.com",
+              loginPath: "/login",
+              loginButtonSelectors: ["button.login"],
+              successUrlPatterns: ["/console"],
+              tokenStorageKeys: ["access_token"],
+              postLoginSelectors: [],
+              executionMode: "local-browser",
+              localBrowser: {
+                cloudflareMode: "prewarm",
+                flareSolverrScope: "root",
+                allowRetryAfterBrowserChallenge: true,
+                openRootBeforeCheckin: false,
+                manualFallbackPolicy: "disabled",
+              },
+            },
+          },
+        } as ServerConfig & {
+          localFlareSolverr: {
+            enabled: boolean
+            url: string | null
+            timeoutMs: number
+          }
+        },
+      )
+
+      ;(
+        service as unknown as {
+          findTargetPage: () => Promise<Page | null>
+          pickFlowPage: () => typeof page
+          detectCloudflareChallenge: () => Promise<boolean>
+          prewarmLocalBrowserChallenge: () => Promise<{
+            appliedCookies: number
+            userAgent: string | null
+          } | null>
+        }
+      ).findTargetPage = async () => null
+      ;(
+        service as unknown as {
+          pickFlowPage: () => typeof page
+          detectCloudflareChallenge: () => Promise<boolean>
+          prewarmLocalBrowserChallenge: () => Promise<{
+            appliedCookies: number
+            userAgent: string | null
+          } | null>
+        }
+      ).pickFlowPage = () => page
+      ;(
+        service as unknown as {
+          detectCloudflareChallenge: () => Promise<boolean>
+          prewarmLocalBrowserChallenge: () => Promise<{
+            appliedCookies: number
+            userAgent: string | null
+          } | null>
+        }
+      ).detectCloudflareChallenge = async () => true
+      ;(
+        service as unknown as {
+          prewarmLocalBrowserChallenge: () => Promise<{
+            appliedCookies: number
+            userAgent: string | null
+          } | null>
+        }
+      ).prewarmLocalBrowserChallenge = async () => {
+        prewarmCallCount += 1
+        return prewarmCallCount === 1
+          ? {
+              appliedCookies: 1,
+              userAgent: "ua-local",
+            }
+          : null
+      }
+
+      const result = await service.checkInWithBrowserSession(baseAccount, {
+        onProgress(message) {
+          progress.push(message)
+        },
+      })
+
+      expect(prewarmCallCount).toBe(2)
+      expect(result?.status).toBe(CheckinResultStatus.Failed)
+      expect(result?.code).toBe("cloudflare_prewarm_exhausted")
+      expect(progress).toContain("本地 FlareSolverr 预热失败")
     } finally {
       launchSpy.mockRestore()
     }

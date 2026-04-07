@@ -498,6 +498,56 @@ describe("CheckinOrchestrator", () => {
     expect(result.record.results[0].message).toContain("浏览器会话补签")
   })
 
+  it("preserves refresh failure codes after auth_invalid-triggered auto recovery", async () => {
+    const repository = await createRepositoryWithAccounts([baseAccount])
+    let refreshCalls = 0
+
+    const refresher: SiteSessionRefresher = {
+      async refreshSiteSession(): Promise<SessionRefreshResult> {
+        refreshCalls += 1
+        return {
+          status: "failed",
+          code: "cloudflare_prewarm_exhausted",
+          message: "浏览器过程中再次命中 Cloudflare，额外预热仍失败",
+        } as SessionRefreshResult
+      },
+    }
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {
+          "demo.example.com": {
+            hostname: "demo.example.com",
+            loginPath: "/login",
+            loginButtonSelectors: ["button.login"],
+            successUrlPatterns: ["/console"],
+            tokenStorageKeys: ["access_token"],
+            postLoginSelectors: [".avatar"],
+          },
+        },
+      },
+      refresher,
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: "无权进行此操作",
+          }),
+          { status: 401 },
+        ),
+    )
+
+    const result = await orchestrator.runCheckinBatch({
+      accountId: baseAccount.id,
+      mode: "manual",
+    })
+
+    expect(refreshCalls).toBe(1)
+    expect(result.record.summary.failed).toBe(1)
+    expect(result.record.results[0].code).toBe("cloudflare_prewarm_exhausted")
+  })
+
   it("uses the same browser-session fallback for scheduled runanytime batch check-ins", async () => {
     const runAnytimeAccount: SiteAccount = {
       ...baseAccount,

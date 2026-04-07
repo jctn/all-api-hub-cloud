@@ -108,6 +108,7 @@ export type SessionRefreshStatus =
 export interface SessionRefreshResult {
   status: SessionRefreshStatus
   message: string
+  code?: string
   account?: SiteAccount
   diagnosticPath?: string
 }
@@ -147,6 +148,12 @@ export interface PlaywrightSiteSessionConfig
     timeoutMs: number
   }
 }
+
+type LoginFlowResult =
+  | { status: "ready"; page: Page }
+  | { status: "manual_action_required"; message: string }
+  | { status: "unsupported_auto_reauth"; message: string }
+  | { status: "failed"; code: string; message: string }
 
 export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   constructor(
@@ -198,6 +205,28 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       page = context.pages()[0] ?? (await context.newPage())
       await this.reportProgress(options, "浏览器上下文已启动")
 
+      if (this.shouldUseLocalFlareSolverr(profile)) {
+        await this.reportProgress(options, "命中本地 FlareSolverr 预热策略")
+        const prewarmResult = await this.prewarmLocalBrowserChallenge(
+          context,
+          account,
+          profile,
+          options,
+        )
+        if (!prewarmResult) {
+          const diagnosticPath = await this.captureDiagnostic(page, account)
+          if (diagnosticPath) {
+            await this.reportProgress(options, `已保存诊断截图：${diagnosticPath}`)
+          }
+          return {
+            status: "failed",
+            code: "local_flaresolverr_prewarm_failed",
+            message: "本地 FlareSolverr 预热失败",
+            diagnosticPath,
+          }
+        }
+      }
+
       await this.reportProgress(
         options,
         `打开站点登录页：${joinUrl(account.site_url, profile.loginPath)}`,
@@ -215,6 +244,19 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         options,
       )
       if (flowResult.status !== "ready") {
+        if (flowResult.status === "failed") {
+          const diagnosticPath = await this.captureDiagnostic(page, account)
+          if (diagnosticPath) {
+            await this.reportProgress(options, `已保存诊断截图：${diagnosticPath}`)
+          }
+          return {
+            status: "failed",
+            code: flowResult.code,
+            message: flowResult.message,
+            diagnosticPath,
+          }
+        }
+
         if (
           flowResult.status === "manual_action_required" &&
           !this.shouldAllowManualFallback(account, profile)
@@ -226,6 +268,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           }
           return {
             status: "failed",
+            code: "manual_fallback_disabled",
             message: flowResult.message,
             diagnosticPath,
           }
@@ -358,7 +401,27 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
       if (this.shouldUseLocalFlareSolverr(profile)) {
         await this.reportProgress(options, "命中本地 FlareSolverr 预热策略")
-        await this.prewarmLocalBrowserChallenge(context, account, profile, options)
+        const prewarmResult = await this.prewarmLocalBrowserChallenge(
+          context,
+          account,
+          profile,
+          options,
+        )
+        if (!prewarmResult) {
+          const now = Date.now()
+          return {
+            accountId: account.id,
+            siteName: account.site_name,
+            siteUrl: account.site_url,
+            siteType: account.site_type,
+            status: CheckinResultStatus.Failed,
+            code: "local_flaresolverr_prewarm_failed",
+            message: "本地 FlareSolverr 预热失败",
+            startedAt: now,
+            completedAt: now,
+            checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
+          }
+        }
       }
 
       if (this.isRunAnytimeSite(account)) {
@@ -476,6 +539,22 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         options,
       )
       if (flowResult.status !== "ready") {
+        if (flowResult.status === "failed") {
+          const now = Date.now()
+          return {
+            accountId: account.id,
+            siteName: account.site_name,
+            siteUrl: account.site_url,
+            siteType: account.site_type,
+            status: CheckinResultStatus.Failed,
+            code: flowResult.code,
+            message: flowResult.message,
+            startedAt: now,
+            completedAt: now,
+            checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
+          }
+        }
+
         if (
           flowResult.status === "manual_action_required" &&
           !this.shouldAllowManualFallback(account, profile)
@@ -637,11 +716,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     account: SiteAccount,
     profile: SiteLoginProfile,
     options: SessionRefreshOptions,
-  ): Promise<
-    | { status: "ready"; page: Page }
-    | { status: "manual_action_required"; message: string }
-    | { status: "unsupported_auto_reauth"; message: string }
-  > {
+  ): Promise<LoginFlowResult> {
     const targetHost = new URL(account.site_url).hostname.toLowerCase()
     const linuxdoHost = new URL(this.config.github.linuxdoBaseUrl).hostname.toLowerCase()
     let deadline = Date.now() + 120_000
@@ -651,6 +726,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const callbackWaits = new Set<string>()
     let linuxdoSsoRestartAttempts = 0
     let flareSolverrAttempts = 0
+    let browserChallengePrewarmUsed = false
     const MAX_FLARESOLVERR_ATTEMPTS = 8
 
     while (Date.now() < deadline) {
@@ -755,6 +831,64 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       if (await this.detectCloudflareChallenge(flowPage)) {
+        if (this.shouldRetryBrowserChallengeWithLocalPrewarm(profile)) {
+          if (browserChallengePrewarmUsed) {
+            const exhaustedMsg =
+              "浏览器过程中再次命中 Cloudflare，额外预热次数已耗尽，停止自动重试"
+            await this.reportProgress(options, exhaustedMsg)
+            return {
+              status: "failed",
+              code: "cloudflare_prewarm_exhausted",
+              message: exhaustedMsg,
+            }
+          }
+
+          browserChallengePrewarmUsed = true
+          await this.reportProgress(
+            options,
+            "浏览器过程中再次命中 Cloudflare，尝试一次额外预热",
+          )
+          const prewarmResult = await this.prewarmLocalBrowserChallenge(
+            context,
+            account,
+            profile,
+            options,
+            currentUrl || undefined,
+          )
+          if (!prewarmResult) {
+            await this.reportProgress(options, "本地 FlareSolverr 预热失败")
+            return {
+              status: "failed",
+              code: "cloudflare_prewarm_exhausted",
+              message: "浏览器过程中再次命中 Cloudflare，额外预热仍失败",
+            }
+          }
+
+          await this.reportProgress(
+            options,
+            "额外预热完成，刷新当前页面后继续自动流程",
+          )
+          const reloadPage = flowPage as Page & {
+            reload?: (options?: {
+              waitUntil?: "domcontentloaded"
+              timeout?: number
+            }) => Promise<unknown>
+          }
+          if (typeof reloadPage.reload === "function") {
+            await reloadPage.reload({
+              waitUntil: "domcontentloaded",
+              timeout: 60_000,
+            })
+          } else if (currentUrl) {
+            await flowPage.goto(currentUrl, {
+              waitUntil: "domcontentloaded",
+              timeout: 60_000,
+            })
+          }
+          await flowPage.waitForTimeout(1_000)
+          continue
+        }
+
         if (flareSolverrAttempts < MAX_FLARESOLVERR_ATTEMPTS && this.config.flareSolverrUrl) {
           flareSolverrAttempts++
           if (await this.solveCloudflareWithFlareSolverr(context, flowPage, options)) {
@@ -2836,6 +2970,16 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     )
   }
 
+  private shouldRetryBrowserChallengeWithLocalPrewarm(
+    profile: SiteLoginProfile,
+  ): boolean {
+    const localProfile = this.resolveLocalBrowserProfile(profile)
+    return Boolean(
+      localProfile?.allowRetryAfterBrowserChallenge &&
+        this.shouldUseLocalFlareSolverr(profile),
+    )
+  }
+
   private isRunAnytimeLoginPage(url: string): boolean {
     try {
       const parsed = new URL(url)
@@ -2879,7 +3023,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   private buildLocalFlareSolverrTargetUrl(
     account: SiteAccount,
     profile: SiteLoginProfile,
+    targetUrl?: string,
   ): string {
+    if (targetUrl) {
+      return targetUrl
+    }
+
     const localProfile = this.resolveLocalBrowserProfile(profile)
     const targetPath =
       localProfile?.flareSolverrTargetPath ||
@@ -2897,6 +3046,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     account: SiteAccount,
     profile: SiteLoginProfile,
     options: SessionRefreshOptions,
+    targetUrlOverride?: string,
   ): Promise<{
     appliedCookies: number
     userAgent: string | null
@@ -2907,7 +3057,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       return null
     }
 
-    const targetUrl = this.buildLocalFlareSolverrTargetUrl(account, profile)
+    const targetUrl = this.buildLocalFlareSolverrTargetUrl(
+      account,
+      profile,
+      targetUrlOverride,
+    )
     const page = context.pages()[0] ?? (await context.newPage())
 
     await this.reportProgress(options, `开始本地 FlareSolverr 预热：${targetUrl}`)

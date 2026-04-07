@@ -83,7 +83,7 @@ function buildRefreshFailureResult(
       refreshResult.status === "failed"
         ? CheckinResultStatus.Failed
         : CheckinResultStatus.ManualActionRequired,
-    code: refreshResult.status,
+    code: refreshResult.code ?? refreshResult.status,
     message: refreshResult.message,
     rawMessage: refreshResult.diagnosticPath,
     startedAt: now,
