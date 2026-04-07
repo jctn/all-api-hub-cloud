@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import {
   AuthType,
@@ -11,6 +11,7 @@ import {
 import type { ServerConfig } from "../src/config.js"
 import { PlaywrightSiteSessionService } from "../src/auth/playwrightSessionService.js"
 import type { SiteLoginProfile } from "../src/auth/siteLoginProfiles.js"
+import { chromium } from "playwright"
 
 const baseAccount: SiteAccount = {
   id: "acc-1",
@@ -1283,6 +1284,12 @@ describe("PlaywrightSiteSessionService", () => {
       url() {
         return "https://runanytime.hxi.me/console/personal"
       },
+      async waitForResponse() {
+        throw new Error("native follow-up should time out in this test")
+      },
+      async waitForLoadState() {
+        return undefined
+      },
       async evaluate(_fn: unknown, arg?: unknown) {
         if (Array.isArray(arg)) {
           return ""
@@ -1358,7 +1365,150 @@ describe("PlaywrightSiteSessionService", () => {
 
     expect(result.status).toBe(CheckinResultStatus.Success)
     expect(result.message).toContain("签到成功")
-    expect(followupTokens).toEqual(["", "manual-turnstile-token"])
+    expect(followupTokens).toEqual(["manual-turnstile-token"])
+    expect(progress).toContain("请在本机浏览器完成 RunAnytime Turnstile 验证")
+  })
+
+  it("prefers the native runanytime turnstile follow-up response in headed mode without rendering a new widget", async () => {
+    const progress: string[] = []
+    let waitedForNativeFollowup = false
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      {
+        ...baseConfig,
+        browserHeadless: false,
+        manualLoginWaitTimeoutMs: 5_000,
+      },
+      async () => {
+        throw new Error("unexpected node fetch call")
+      },
+    )
+
+    ;(
+      service as unknown as {
+        performRunAnytimeTurnstileFollowup: (
+          page: unknown,
+          account: SiteAccount,
+          requestUrl: string,
+          preferredTurnstileToken?: string,
+        ) => Promise<{ statusCode: number; rawText: string; requestUrl: string } | null>
+      }
+    ).performRunAnytimeTurnstileFollowup = async () => {
+      throw new Error("should not render a new turnstile widget before waiting for manual completion")
+    }
+
+    const page = {
+      url() {
+        return "https://runanytime.hxi.me/console/personal"
+      },
+      async waitForResponse() {
+        waitedForNativeFollowup = true
+        return {
+          url() {
+            return "https://runanytime.hxi.me/api/user/checkin?pow_challenge=abc&pow_nonce=00000001&turnstile=cf-token"
+          },
+          request() {
+            return {
+              method() {
+                return "POST"
+              },
+            }
+          },
+          status() {
+            return 200
+          },
+          async text() {
+            return JSON.stringify({
+              success: true,
+              message: "签到成功",
+              data: {
+                quota_awarded: 5200000,
+              },
+            })
+          },
+        }
+      },
+      async waitForLoadState() {
+        return undefined
+      },
+      async evaluate(_fn: unknown, arg?: unknown) {
+        if (Array.isArray(arg)) {
+          return ""
+        }
+        return {
+          challenge: {
+            statusCode: 200,
+            rawText: JSON.stringify({
+              success: true,
+              data: {
+                challenge_id: "abc",
+                prefix: "pow-prefix",
+                difficulty: 1,
+              },
+            }),
+            payload: {
+              success: true,
+              data: {
+                challenge_id: "abc",
+                prefix: "pow-prefix",
+                difficulty: 1,
+              },
+            },
+          },
+          solved: {
+            nonce: "00000001",
+            attempts: 2,
+          },
+          requestUrl:
+            "https://runanytime.hxi.me/api/user/checkin?pow_challenge=abc&pow_nonce=00000001",
+          checkin: {
+            statusCode: 200,
+            rawText: JSON.stringify({
+              success: false,
+              message: "Turnstile token 为空",
+            }),
+            payload: {
+              success: false,
+              message: "Turnstile token 为空",
+            },
+          },
+        }
+      },
+    }
+
+    const result = await (service as unknown as {
+      performRunAnytimePowCheckin: (
+        page: typeof page,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<{
+        status: CheckinResultStatus
+        message: string
+      }>
+    }).performRunAnytimePowCheckin(
+      page,
+      {
+        ...baseAccount,
+        site_name: "随时跑路公益站",
+        site_url: "https://runanytime.hxi.me",
+      },
+      {
+        ...baseProfile,
+        hostname: "runanytime.hxi.me",
+      },
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(result.status).toBe(CheckinResultStatus.Success)
+    expect(result.message).toContain("签到成功")
+    expect(result.message).toContain("已通过浏览器会话补签")
+    expect(waitedForNativeFollowup).toBe(true)
     expect(progress).toContain("请在本机浏览器完成 RunAnytime Turnstile 验证")
   })
 
@@ -1823,6 +1973,257 @@ describe("PlaywrightSiteSessionService", () => {
       value: "clear456",
     })
     expect(progress).toContain("注入 2 个账号会话 cookie")
+  })
+
+  it("opens the runanytime site root and pauses when local debug root-only mode is enabled", async () => {
+    const progress: string[] = []
+    const gotoCalls: string[] = []
+    let currentUrl = "about:blank"
+    let closed = false
+
+    const page = {
+      url() {
+        return currentUrl
+      },
+      async goto(url: string) {
+        gotoCalls.push(url)
+        currentUrl =
+          url === "https://runanytime.hxi.me"
+            ? "https://runanytime.hxi.me/login?expired=true"
+            : url
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        closed = true
+      },
+    }
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {
+          async saveAccount() {
+            throw new Error("should not persist account in debug root-only mode")
+          },
+        } as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          runAnytimeDebugRootOnlyPause: true,
+        },
+      )
+
+      ;(
+        service as unknown as {
+          seedBrowserContextWithAccountCookies: () => Promise<number>
+          captureAuthenticatedAccount: () => Promise<SiteAccount | null>
+          performBrowserSessionCheckin: () => Promise<never>
+          completeLoginFlow: () => Promise<never>
+        }
+      ).seedBrowserContextWithAccountCookies = async () => 2
+      ;(
+        service as unknown as {
+          captureAuthenticatedAccount: () => Promise<SiteAccount | null>
+          performBrowserSessionCheckin: () => Promise<never>
+          completeLoginFlow: () => Promise<never>
+        }
+      ).captureAuthenticatedAccount = async () => {
+        throw new Error("should not capture authenticated account in debug root-only mode")
+      }
+      ;(
+        service as unknown as {
+          performBrowserSessionCheckin: () => Promise<never>
+          completeLoginFlow: () => Promise<never>
+        }
+      ).performBrowserSessionCheckin = async () => {
+        throw new Error("should not execute automatic check-in in debug root-only mode")
+      }
+      ;(
+        service as unknown as {
+          completeLoginFlow: () => Promise<never>
+        }
+      ).completeLoginFlow = async () => {
+        throw new Error("should not continue the login flow in debug root-only mode")
+      }
+
+      const result = await service.checkInWithBrowserSession(
+        {
+          ...baseAccount,
+          site_name: "随时跑路公益站",
+          site_url: "https://runanytime.hxi.me",
+          cookieAuth: {
+            sessionCookie: "session=abc123; cf_clearance=clear456",
+          },
+        },
+        {
+          onProgress(message) {
+            progress.push(message)
+          },
+        },
+      )
+
+      expect(result?.status).toBe(CheckinResultStatus.ManualActionRequired)
+      expect(result?.code).toBe("runanytime_debug_root_pause")
+      expect(result?.message).toContain("暂停自动签到")
+      expect(gotoCalls).toEqual(["https://runanytime.hxi.me"])
+      expect(progress).toContain("RunAnytime 先复用账号已有站点会话 cookie（2 个）")
+      expect(progress).toContain("RunAnytime 调试模式：打开站点根页面：https://runanytime.hxi.me")
+      expect(progress).toContain(
+        "RunAnytime 调试模式：当前页面：https://runanytime.hxi.me/login?expired=true",
+      )
+      expect(progress).toContain("RunAnytime 调试模式：已暂停自动签到，请先在本机浏览器观察并手动处理登录状态")
+      expect(progress).toContain("RunAnytime 调试模式：保留当前浏览器窗口，供本机继续调试")
+      expect(closed).toBe(false)
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
+  it("prewarms local-browser sessions with flaresolverr before opening the site flow", async () => {
+    const progress: string[] = []
+    const prewarmCalls: string[] = []
+    const timeline: string[] = []
+
+    const page = {
+      url() {
+        return "about:blank"
+      },
+      async goto(url: string) {
+        timeline.push(`goto:${url}`)
+      },
+      async screenshot() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+      async addCookies() {
+        return undefined
+      },
+    }
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          flareSolverrUrl: "http://127.0.0.1:8191",
+          localFlareSolverr: {
+            enabled: true,
+            url: "http://127.0.0.1:8191",
+            timeoutMs: 90_000,
+          },
+          siteLoginProfiles: {
+            "demo.example.com": {
+              hostname: "demo.example.com",
+              loginPath: "/login",
+              loginButtonSelectors: ["button.login"],
+              successUrlPatterns: ["/console"],
+              tokenStorageKeys: ["access_token"],
+              postLoginSelectors: [],
+              executionMode: "local-browser",
+              localBrowser: {
+                cloudflareMode: "prewarm",
+                flareSolverrScope: "root",
+                flareSolverrTargetPath: "/",
+                allowRetryAfterBrowserChallenge: true,
+                openRootBeforeCheckin: true,
+                manualFallbackPolicy: "disabled",
+              },
+            },
+          },
+        } as ServerConfig & {
+          localFlareSolverr: {
+            enabled: boolean
+            url: string | null
+            timeoutMs: number
+          }
+        },
+      )
+
+      ;(
+        service as unknown as {
+          prewarmLocalBrowserChallenge: () => Promise<{
+            appliedCookies: number
+            userAgent?: string
+          }>
+          completeLoginFlow: () => Promise<{ status: "ready"; page: typeof page }>
+          performBrowserSessionCheckin: () => Promise<CheckinAccountResult>
+        }
+      ).prewarmLocalBrowserChallenge = async () => {
+        prewarmCalls.push("called")
+        timeline.push("prewarm")
+        return { appliedCookies: 2, userAgent: "ua" }
+      }
+      ;(
+        service as unknown as {
+          completeLoginFlow: () => Promise<{ status: "ready"; page: typeof page }>
+          performBrowserSessionCheckin: () => Promise<CheckinAccountResult>
+        }
+      ).completeLoginFlow = async () => ({ status: "ready", page })
+      ;(
+        service as unknown as {
+          performBrowserSessionCheckin: () => Promise<CheckinAccountResult>
+        }
+      ).performBrowserSessionCheckin = async () =>
+        ({
+          accountId: "acc-local",
+          siteName: "Demo",
+          siteUrl: "https://demo.example.com",
+          siteType: "new-api",
+          status: CheckinResultStatus.Success,
+          code: "ok",
+          message: "ok",
+          startedAt: Date.now(),
+          completedAt: Date.now(),
+          checkInUrl: "https://demo.example.com/console/personal",
+        }) as CheckinAccountResult
+
+      await service.checkInWithBrowserSession(
+        {
+          ...baseAccount,
+          id: "acc-local",
+          site_name: "Demo",
+          site_url: "https://demo.example.com",
+        },
+        {
+          onProgress(message) {
+            progress.push(message)
+          },
+        },
+      )
+
+      expect(prewarmCalls).toHaveLength(1)
+      expect(progress).toContain("命中本地 FlareSolverr 预热策略")
+      expect(timeline[0]).toBe("prewarm")
+    } finally {
+      launchSpy.mockRestore()
+    }
   })
 
   it("treats the runanytime login page as ready once the turnstile token is populated", async () => {

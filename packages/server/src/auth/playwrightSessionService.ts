@@ -27,6 +27,7 @@ import { solveCloudflareChallenge } from "./flareSolverrClient.js"
 import { generateGitHubTotp } from "./githubTotp.js"
 import {
   matchOrDefaultSiteLoginProfile,
+  type LocalBrowserProfile,
   type SiteLoginProfile,
 } from "./siteLoginProfiles.js"
 
@@ -139,6 +140,12 @@ export interface PlaywrightSiteSessionConfig
   browserHeadless?: boolean
   chromiumLaunchArgs?: string[]
   manualLoginWaitTimeoutMs?: number
+  runAnytimeDebugRootOnlyPause?: boolean
+  localFlareSolverr?: {
+    enabled: boolean
+    url: string | null
+    timeoutMs: number
+  }
 }
 
 export class PlaywrightSiteSessionService implements SiteSessionRefresher {
@@ -315,6 +322,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
     let context: BrowserContext | null = null
     let page: Page | null = null
+    let shouldCloseContext = true
 
     try {
       context = await chromium.launchPersistentContext(
@@ -328,6 +336,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       )
       page = context.pages()[0] ?? (await context.newPage())
 
+      if (this.shouldUseLocalFlareSolverr(profile)) {
+        await this.reportProgress(options, "命中本地 FlareSolverr 预热策略")
+        await this.prewarmLocalBrowserChallenge(context, account, profile, options)
+      }
+
       if (this.isRunAnytimeSite(account)) {
         const injectedCookieCount = await this.seedBrowserContextWithAccountCookies(
           context,
@@ -339,6 +352,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             options,
             `RunAnytime 先复用账号已有站点会话 cookie（${injectedCookieCount} 个）`,
           )
+        }
+
+        if (this.resolveRunAnytimeDebugRootOnlyPause()) {
+          shouldCloseContext = false
+          return await this.pauseRunAnytimeAtRootForDebug(page, account, options)
+        }
+
+        if (injectedCookieCount > 0) {
           await page.goto(joinUrl(account.site_url, resolveCheckInPath(account.site_type)), {
             waitUntil: "domcontentloaded",
             timeout: 90_000,
@@ -465,7 +486,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
       }
     } finally {
-      await context?.close()
+      if (shouldCloseContext) {
+        await context?.close()
+      }
     }
   }
 
@@ -2433,6 +2456,46 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
     | null
   > {
+    if (!this.resolveBrowserHeadless()) {
+      const manualWaitTimeoutMs = this.config.manualLoginWaitTimeoutMs ?? 300_000
+      const nativeFollowupTimeoutMs = Math.min(manualWaitTimeoutMs, 15_000)
+
+      await this.reportProgress(options, "请在本机浏览器完成 RunAnytime Turnstile 验证")
+
+      const nativeFollowupResponse = await this.waitForRunAnytimeNativeFollowupResponse(
+        page,
+        account,
+        nativeFollowupTimeoutMs,
+      )
+      if (nativeFollowupResponse) {
+        return nativeFollowupResponse
+      }
+
+      const manualToken = await this.waitForManualRunAnytimeTurnstileToken(
+        page,
+        options,
+        {
+          timeoutMs: Math.max(manualWaitTimeoutMs - nativeFollowupTimeoutMs, 0),
+          suppressIntro: true,
+        },
+      )
+      if (!manualToken) {
+        return null
+      }
+
+      await this.reportProgress(
+        options,
+        "检测到人工完成 RunAnytime Turnstile 验证，重新提交签到请求",
+      )
+
+      return await this.performRunAnytimeTurnstileFollowup(
+        page,
+        account,
+        requestUrl,
+        manualToken,
+      )
+    }
+
     const followupResponse = await this.performRunAnytimeTurnstileFollowup(
       page,
       account,
@@ -2469,6 +2532,44 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         manualToken,
       )) || followupResponse
     )
+  }
+
+  private async waitForRunAnytimeNativeFollowupResponse(
+    page: Page,
+    account: SiteAccount,
+    timeoutMs: number,
+  ): Promise<
+    | {
+        statusCode: number
+        rawText: string
+        requestUrl: string
+      }
+    | null
+  > {
+    if (timeoutMs <= 0) {
+      return null
+    }
+
+    const apiUrl = joinUrl(normalizeBaseUrl(account.site_url), "/api/user/checkin")
+    const response = await page
+      .waitForResponse(
+        (candidate) =>
+          candidate.url().startsWith(apiUrl) &&
+          candidate.url().toLowerCase().includes("turnstile=") &&
+          candidate.request().method().toUpperCase() === "POST",
+        { timeout: timeoutMs },
+      )
+      .catch(() => null)
+
+    if (!response) {
+      return null
+    }
+
+    return {
+      statusCode: response.status(),
+      rawText: await response.text().catch(() => ""),
+      requestUrl: response.url(),
+    }
   }
 
   private buildBrowserSessionCheckinHeaders(
@@ -2514,6 +2615,53 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
   }
 
+  private resolveRunAnytimeDebugRootOnlyPause(): boolean {
+    return this.config.runAnytimeDebugRootOnlyPause ?? false
+  }
+
+  private async pauseRunAnytimeAtRootForDebug(
+    page: Page,
+    account: SiteAccount,
+    options: SessionRefreshOptions,
+  ): Promise<CheckinAccountResult> {
+    const startedAt = Date.now()
+    const targetBaseUrl = normalizeBaseUrl(account.site_url)
+
+    await this.reportProgress(
+      options,
+      `RunAnytime 调试模式：打开站点根页面：${targetBaseUrl}`,
+    )
+    await page.goto(targetBaseUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 90_000,
+    })
+    await this.reportProgress(
+      options,
+      `RunAnytime 调试模式：当前页面：${page.url()}`,
+    )
+    await this.reportProgress(
+      options,
+      "RunAnytime 调试模式：已暂停自动签到，请先在本机浏览器观察并手动处理登录状态",
+    )
+    await this.reportProgress(
+      options,
+      "RunAnytime 调试模式：保留当前浏览器窗口，供本机继续调试",
+    )
+
+    return {
+      accountId: account.id,
+      siteName: account.site_name,
+      siteUrl: account.site_url,
+      siteType: account.site_type,
+      status: CheckinResultStatus.ManualActionRequired,
+      code: "runanytime_debug_root_pause",
+      message: "RunAnytime 调试模式已暂停自动签到，请先在本机浏览器观察并手动处理登录状态",
+      startedAt,
+      completedAt: Date.now(),
+      checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
+    }
+  }
+
   private isManualActionRequiredMessage(message: string): boolean {
     const normalized = message.toLowerCase()
     return (
@@ -2555,6 +2703,118 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       normalized.includes("turnstile") ||
       normalized.includes("cloudflare")
     )
+  }
+
+  private resolveLocalBrowserProfile(
+    profile: SiteLoginProfile,
+  ): LocalBrowserProfile | null {
+    if (profile.executionMode !== "local-browser") {
+      return null
+    }
+
+    return profile.localBrowser ?? null
+  }
+
+  private shouldUseLocalFlareSolverr(profile: SiteLoginProfile): boolean {
+    const localProfile = this.resolveLocalBrowserProfile(profile)
+    if (!localProfile || localProfile.cloudflareMode !== "prewarm") {
+      return false
+    }
+
+    if (this.config.localFlareSolverr) {
+      return Boolean(
+        this.config.localFlareSolverr.enabled && this.config.localFlareSolverr.url,
+      )
+    }
+
+    return Boolean(this.config.flareSolverrUrl)
+  }
+
+  private buildLocalFlareSolverrTargetUrl(
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+  ): string {
+    const localProfile = this.resolveLocalBrowserProfile(profile)
+    const targetPath =
+      localProfile?.flareSolverrTargetPath ||
+      (localProfile?.flareSolverrScope === "root"
+        ? "/"
+        : localProfile?.flareSolverrScope === "checkin"
+          ? resolveCheckInPath(account.site_type)
+          : profile.loginPath)
+
+    return joinUrl(account.site_url, targetPath)
+  }
+
+  private async prewarmLocalBrowserChallenge(
+    context: BrowserContext,
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
+  ): Promise<{
+    appliedCookies: number
+    userAgent: string | null
+  } | null> {
+    const localFlareSolverrUrl =
+      this.config.localFlareSolverr?.url ?? this.config.flareSolverrUrl
+    if (!localFlareSolverrUrl) {
+      return null
+    }
+
+    const targetUrl = this.buildLocalFlareSolverrTargetUrl(account, profile)
+    const page = context.pages()[0] ?? (await context.newPage())
+
+    await this.reportProgress(options, `开始本地 FlareSolverr 预热：${targetUrl}`)
+
+    try {
+      const result = await solveCloudflareChallenge(
+        localFlareSolverrUrl,
+        targetUrl,
+        this.fetchImpl,
+        (msg) => this.reportProgress(options, `[本地 FlareSolverr] ${msg}`),
+      )
+
+      if (!result) {
+        await this.reportProgress(options, "本地 FlareSolverr 预热失败")
+        return null
+      }
+
+      await context.addCookies(
+        result.cookies.map((cookie) => ({
+          name: cookie.name,
+          value: cookie.value,
+          domain: cookie.domain,
+          path: cookie.path,
+          expires: cookie.expires,
+          httpOnly: cookie.httpOnly,
+          secure: cookie.secure,
+          sameSite: cookie.sameSite as "Strict" | "Lax" | "None",
+        })),
+      )
+      await this.reportProgress(
+        options,
+        `本地 FlareSolverr 注入 ${result.cookies.length} 个 challenge cookie`,
+      )
+
+      if (result.userAgent) {
+        await Promise.race([
+          page.setExtraHTTPHeaders({ "User-Agent": result.userAgent }),
+          new Promise((resolve) => setTimeout(resolve, 3_000)),
+        ]).catch(() => undefined)
+        await this.reportProgress(
+          options,
+          `本地 FlareSolverr 同步 UA: ${result.userAgent.slice(0, 40)}...`,
+        )
+      }
+
+      return {
+        appliedCookies: result.cookies.length,
+        userAgent: result.userAgent ?? null,
+      }
+    } catch {
+      await this.reportProgress(options, "本地 FlareSolverr 预热异常")
+      return null
+    }
   }
 
   private async solveCloudflareWithFlareSolverr(
@@ -2681,16 +2941,27 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   private async waitForManualRunAnytimeTurnstileToken(
     page: Page,
     options: SessionRefreshOptions,
+    settings?: {
+      timeoutMs?: number
+      suppressIntro?: boolean
+    },
   ): Promise<string> {
     if (this.resolveBrowserHeadless()) {
       return ""
     }
 
-    const timeoutMs = this.config.manualLoginWaitTimeoutMs ?? 300_000
-    await this.reportProgress(
-      options,
-      `RunAnytime Turnstile 需要人工验证，请在本机浏览器完成挑战；最长等待 ${Math.round(timeoutMs / 1_000)} 秒`,
-    )
+    const timeoutMs = settings?.timeoutMs ?? this.config.manualLoginWaitTimeoutMs ?? 300_000
+    if (timeoutMs <= 0) {
+      await this.reportProgress(options, "RunAnytime Turnstile 人工验证等待超时")
+      return ""
+    }
+
+    if (!settings?.suppressIntro) {
+      await this.reportProgress(
+        options,
+        `RunAnytime Turnstile 需要人工验证，请在本机浏览器完成挑战；最长等待 ${Math.round(timeoutMs / 1_000)} 秒`,
+      )
+    }
 
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
