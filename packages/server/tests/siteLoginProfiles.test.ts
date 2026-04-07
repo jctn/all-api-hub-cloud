@@ -109,6 +109,7 @@ describe("site login profiles", () => {
       allowRetryAfterBrowserChallenge: true,
       openRootBeforeCheckin: true,
       manualFallbackPolicy: "disabled",
+      manualFallbackPolicyExplicit: true,
     })
     expect(profiles["runanytime.hxi.me"]?.executionMode).toBe("local-browser")
     expect(profiles["runanytime.hxi.me"]).not.toHaveProperty("cloudflareMode")
@@ -131,6 +132,7 @@ describe("site login profiles", () => {
       allowRetryAfterBrowserChallenge: false,
       openRootBeforeCheckin: false,
       manualFallbackPolicy: "last-resort",
+      manualFallbackPolicyExplicit: false,
     })
     expect(profiles["manual.example.com"]?.localBrowser).not.toHaveProperty(
       "flareSolverrTargetPath",

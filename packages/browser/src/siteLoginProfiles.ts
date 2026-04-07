@@ -12,6 +12,7 @@ export interface LocalBrowserProfile {
   allowRetryAfterBrowserChallenge: boolean
   openRootBeforeCheckin: boolean
   manualFallbackPolicy: LocalBrowserManualFallbackPolicy
+  manualFallbackPolicyExplicit?: boolean
 }
 
 export interface SiteLoginProfile {
@@ -91,6 +92,10 @@ function normalizeLocalBrowserProfile(value: unknown): LocalBrowserProfile | und
 
   const record = value as Record<string, unknown>
   const flareSolverrTargetPath = normalizeOptionalString(record.flareSolverrTargetPath)
+  const manualFallbackPolicyExplicit = Object.prototype.hasOwnProperty.call(
+    record,
+    "manualFallbackPolicy",
+  )
   return {
     cloudflareMode: normalizeLocalBrowserCloudflareMode(record.cloudflareMode),
     flareSolverrScope: normalizeLocalBrowserFlareSolverrScope(record.flareSolverrScope),
@@ -99,6 +104,7 @@ function normalizeLocalBrowserProfile(value: unknown): LocalBrowserProfile | und
     manualFallbackPolicy: normalizeLocalBrowserManualFallbackPolicy(
       record.manualFallbackPolicy,
     ),
+    manualFallbackPolicyExplicit,
     ...(flareSolverrTargetPath ? { flareSolverrTargetPath } : {}),
   }
 }

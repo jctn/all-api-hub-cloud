@@ -2628,9 +2628,6 @@ describe("PlaywrightSiteSessionService", () => {
         },
       },
     })
-    const originalSiteLoginProfilesJson = process.env.SITE_LOGIN_PROFILES_JSON
-    process.env.SITE_LOGIN_PROFILES_JSON = rawProfiles
-
     const launchSpy = vi
       .spyOn(chromium, "launchPersistentContext")
       .mockResolvedValue(context as never)
@@ -2641,6 +2638,8 @@ describe("PlaywrightSiteSessionService", () => {
         {
           ...baseConfig,
           browserHeadless: false,
+          siteLoginProfilesSource:
+            "github://owner/repo/site-login-profiles.json@main",
           siteLoginProfiles: parseSiteLoginProfiles(rawProfiles),
         },
       )
@@ -2699,7 +2698,6 @@ describe("PlaywrightSiteSessionService", () => {
       expect(waitForManualLoginCompletion).toHaveBeenCalledTimes(1)
       expect(performBrowserSessionCheckin).toHaveBeenCalledTimes(1)
     } finally {
-      process.env.SITE_LOGIN_PROFILES_JSON = originalSiteLoginProfilesJson
       launchSpy.mockRestore()
     }
   })
@@ -2746,9 +2744,6 @@ describe("PlaywrightSiteSessionService", () => {
         },
       },
     })
-    const originalSiteLoginProfilesJson = process.env.SITE_LOGIN_PROFILES_JSON
-    process.env.SITE_LOGIN_PROFILES_JSON = rawProfiles
-
     const launchSpy = vi
       .spyOn(chromium, "launchPersistentContext")
       .mockResolvedValue(context as never)
@@ -2759,6 +2754,8 @@ describe("PlaywrightSiteSessionService", () => {
         {
           ...baseConfig,
           browserHeadless: false,
+          siteLoginProfilesSource:
+            "github://owner/repo/site-login-profiles.json@main",
           siteLoginProfiles: parseSiteLoginProfiles(rawProfiles),
         },
       )
@@ -2805,7 +2802,6 @@ describe("PlaywrightSiteSessionService", () => {
       expect(result?.code).toBe("manual_fallback_disabled")
       expect(waitForManualLoginCompletion).not.toHaveBeenCalled()
     } finally {
-      process.env.SITE_LOGIN_PROFILES_JSON = originalSiteLoginProfilesJson
       launchSpy.mockRestore()
     }
   })
@@ -2853,9 +2849,6 @@ describe("PlaywrightSiteSessionService", () => {
         },
       },
     })
-    const originalSiteLoginProfilesJson = process.env.SITE_LOGIN_PROFILES_JSON
-    process.env.SITE_LOGIN_PROFILES_JSON = rawProfiles
-
     const launchSpy = vi
       .spyOn(chromium, "launchPersistentContext")
       .mockResolvedValue(context as never)
@@ -2866,6 +2859,8 @@ describe("PlaywrightSiteSessionService", () => {
         {
           ...baseConfig,
           browserHeadless: false,
+          siteLoginProfilesSource:
+            "github://owner/repo/site-login-profiles.json@main",
           siteLoginProfiles: parseSiteLoginProfiles(rawProfiles),
         },
       )
@@ -2902,7 +2897,6 @@ describe("PlaywrightSiteSessionService", () => {
       expect(result.message).toBe("RunAnytime 登录页验证未完成，需人工介入")
       expect(waitForManualLoginCompletion).not.toHaveBeenCalled()
     } finally {
-      process.env.SITE_LOGIN_PROFILES_JSON = originalSiteLoginProfilesJson
       launchSpy.mockRestore()
     }
   })

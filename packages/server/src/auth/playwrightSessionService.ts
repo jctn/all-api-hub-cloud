@@ -27,7 +27,6 @@ import { solveCloudflareChallenge } from "./flareSolverrClient.js"
 import { generateGitHubTotp } from "./githubTotp.js"
 import {
   matchOrDefaultSiteLoginProfile,
-  type LocalBrowserManualFallbackPolicy,
   type LocalBrowserProfile,
   type SiteLoginProfile,
 } from "./siteLoginProfiles.js"
@@ -137,7 +136,6 @@ export interface PlaywrightSiteSessionConfig
     | "github"
     | "flareSolverrUrl"
     | "siteLoginProfiles"
-    | "siteLoginProfilesSource"
   > {
   browserHeadless?: boolean
   chromiumLaunchArgs?: string[]
@@ -2817,9 +2815,8 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       return true
     }
 
-    const explicitPolicy = this.resolveExplicitManualFallbackPolicy(account)
-    if (explicitPolicy) {
-      return explicitPolicy !== "disabled"
+    if (localProfile.manualFallbackPolicyExplicit) {
+      return localProfile.manualFallbackPolicy !== "disabled"
     }
 
     if (this.isRunAnytimeSite(account)) {
@@ -2827,68 +2824,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     return localProfile.manualFallbackPolicy !== "disabled"
-  }
-
-  private resolveExplicitManualFallbackPolicy(
-    account: SiteAccount,
-  ): LocalBrowserManualFallbackPolicy | null {
-    const hostname = this.getUrlHostname(account.site_url)
-    const envPolicy = this.readEnvSourceManualFallbackPolicy(hostname)
-    if (envPolicy !== undefined) {
-      return envPolicy
-    }
-
-    return this.readConfiguredManualFallbackPolicy(hostname)
-  }
-
-  private readEnvSourceManualFallbackPolicy(
-    hostname: string,
-  ): LocalBrowserManualFallbackPolicy | null | undefined {
-    if (this.config.siteLoginProfilesSource !== "env:SITE_LOGIN_PROFILES_JSON") {
-      return undefined
-    }
-
-    const rawProfiles = process.env.SITE_LOGIN_PROFILES_JSON?.trim()
-    if (!rawProfiles) {
-      return undefined
-    }
-
-    try {
-      const parsed = JSON.parse(rawProfiles) as Record<string, unknown>
-      return this.readRawManualFallbackPolicy(parsed[hostname])
-    } catch {
-      return null
-    }
-  }
-
-  private readConfiguredManualFallbackPolicy(
-    hostname: string,
-  ): LocalBrowserManualFallbackPolicy | null {
-    return this.readRawManualFallbackPolicy(
-      (this.config.siteLoginProfiles as Record<string, unknown>)[hostname],
-    )
-  }
-
-  private readRawManualFallbackPolicy(
-    rawProfile: unknown,
-  ): LocalBrowserManualFallbackPolicy | null {
-    if (!rawProfile || typeof rawProfile !== "object" || Array.isArray(rawProfile)) {
-      return null
-    }
-
-    const localBrowser = (rawProfile as Record<string, unknown>).localBrowser
-    if (!localBrowser || typeof localBrowser !== "object" || Array.isArray(localBrowser)) {
-      return null
-    }
-
-    if (!Object.prototype.hasOwnProperty.call(localBrowser, "manualFallbackPolicy")) {
-      return null
-    }
-
-    const rawPolicy = (localBrowser as Record<string, unknown>).manualFallbackPolicy
-    return rawPolicy === "disabled" || rawPolicy === "last-resort"
-      ? rawPolicy
-      : null
   }
 
   private shouldOpenRunAnytimeRootBeforeCheckin(
