@@ -55,6 +55,7 @@ Zeabur server 至少要满足以下条件：
 - `executionMode: "local-browser"` 只表示该站点任务会路由到本地 worker
 - 只有显式配置 `localBrowser.cloudflareMode: "prewarm"` 时，才会启用本地 FlareSolverr 预热
 - 没有 `localBrowser`，或 `localBrowser.cloudflareMode` 未写时，默认仍是 `off`
+- 远程 TG 触发、但本机无人值守的站点，推荐显式设置 `manualFallbackPolicy: "disabled"`，避免任务落到人工兜底后长期挂起
 
 ## 3. 本地环境变量
 
@@ -80,6 +81,27 @@ Zeabur server 至少要满足以下条件：
   本地 runtime 根目录；不填时 Windows 默认 `%LOCALAPPDATA%/all-api-hub-worker`
 - `CHROMIUM_PATH`
   指向本机 Chrome/Chromium 可执行文件
+- `LOCAL_FLARESOLVERR_ENABLED`
+  是否启用本地 FlareSolverr 预热能力；默认不启用
+- `LOCAL_FLARESOLVERR_URL`
+  本地 FlareSolverr 地址，默认端口通常为 `http://127.0.0.1:8191`
+- `LOCAL_FLARESOLVERR_TIMEOUT_MS`
+  本地 FlareSolverr 请求和 challenge 预热超时，默认示例为 `90000`
+
+### 3.1 本地 Docker FlareSolverr 前置条件
+
+如果站点 profile 启用了 `localBrowser.cloudflareMode: "prewarm"`，本机还需要满足以下前置条件：
+
+- 本地 Docker 必须常驻，且 FlareSolverr 容器已经提前启动
+- 默认端口是 `8191`，如果你改过映射端口，必须同步修改 `LOCAL_FLARESOLVERR_URL`
+- worker 只会在执行任务时探活并调用 FlareSolverr，不负责 `docker run`、拉镜像或自动重启容器
+- 远程 TG 场景推荐 `manualFallbackPolicy: "disabled"`，优先要明确失败而不是把任务卡在无人接管的浏览器窗口
+
+推荐先单独确认本机能访问：
+
+```bash
+curl http://127.0.0.1:8191/
+```
 
 ## 4. 本地 runtime 目录
 
@@ -146,16 +168,40 @@ worker 运行时的固定行为：
 
 worker 会把任务进度上报为 `waiting_manual`，并尽量保留浏览器窗口给本机人工接管。人工完成后，只要页面进入登录成功状态，后续流程会继续执行。
 
-## 7. 烟测顺序
+## 7. 端到端验证清单
 
 建议按这个顺序做端到端联调：
 
 1. 确认 Zeabur 的 `/internal/healthz` 正常
-2. 在 `site-login-profiles.json` 里把一个测试站点标记成 `executionMode: "local-browser"`
+2. 在 `site-login-profiles.json` 里把一个测试站点标记成 `executionMode: "local-browser"`，如需本地 challenge 预热则显式写入：
+
+```json
+{
+  "runanytime.hxi.me": {
+    "executionMode": "local-browser",
+    "loginButtonSelectors": ["a[href*='linux.do']"],
+    "localBrowser": {
+      "cloudflareMode": "prewarm",
+      "flareSolverrScope": "root",
+      "flareSolverrTargetPath": "/",
+      "allowRetryAfterBrowserChallenge": true,
+      "openRootBeforeCheckin": true,
+      "manualFallbackPolicy": "disabled"
+    }
+  }
+}
+```
+
 3. 启动本地 worker
 4. 在 TG 里执行 `/status`
 5. 在 TG 里执行 `/checkin <该站点账号>`
-6. 确认任务被本地浏览器接管，且最终结果仍由 TG 返回
+6. 对照以下清单逐项确认：
+
+- 本地 FlareSolverr 不可用时，worker 不进入人工兜底，任务直接失败，并能在日志或结果里看到明确错误码
+- 本地 FlareSolverr 可用时，RunAnytime 在执行签到前会先打开站点根页
+- 根页如果落到 `/login?expired=true`，后续会直接进入完整 SSO 自动登录
+- 成功路径不会进入人工兜底，TG 最终返回成功结果
+- 失败路径会返回明确错误码，例如 `local_flaresolverr_prewarm_failed`、`cloudflare_prewarm_exhausted`、`manual_fallback_disabled`
 
 ## 8. 常见排查
 

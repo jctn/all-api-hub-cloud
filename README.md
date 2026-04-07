@@ -254,6 +254,10 @@ worker 运行特征：
 - Zeabur server 已配置 `LOCAL_WORKER_TOKEN`
 - 本地已准备 `ALL_API_HUB_PRIVATE_DATA_DIR`
 - `site-login-profiles.json` 中目标站点已标记 `executionMode: "local-browser"`
+- 如果站点启用了 `localBrowser.cloudflareMode: "prewarm"`，本地 Docker 需要常驻，且 FlareSolverr 容器已提前启动
+- `LOCAL_FLARESOLVERR_URL` 默认端口通常是 `http://127.0.0.1:8191`
+- worker 只会探活并调用本地 FlareSolverr，不负责启动或重启容器
+- 远程 TG 触发、但本机无人值守的 RunAnytime 场景，推荐 `manualFallbackPolicy: "disabled"`
 
 启动示例：
 
