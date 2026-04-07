@@ -43,12 +43,45 @@ const TELEGRAM_HELP_LINES = [
   "/status — 查看系统状态与任务信息",
   "/version — 查看版本与部署信息",
   "/sync_import — 从 GitHub 仓库同步导入账号",
-  "/checkin_all — 批量签到全部可签到账号",
+  "/checkin_all [-log] — 批量签到全部可签到账号（-log 输出详细日志）",
   "/checkin <accountId|siteName> [-log] — 单账号签到（-log 输出详细日志）",
   "/auth_refresh <accountId|siteName|all> [-log] — 刷新账号会话（-log 输出详细日志）",
   "/disable <accountId|siteName> — 禁用账号（不再签到和刷新）",
   "/enable <accountId|siteName> — 启用账号",
 ] as const
+
+export function shouldBroadcastBatchCheckinProgress(text: string): boolean {
+  const normalized = text.trim()
+  if (!normalized) {
+    return false
+  }
+
+  return (
+    normalized.includes("签到进度 (") ||
+    normalized.includes("本地浏览器任务已入队") ||
+    normalized.includes("本地浏览器任务状态：") ||
+    normalized.includes("命中本地 FlareSolverr 预热策略") ||
+    normalized.includes("先打开站点根页") ||
+    normalized.includes("当前 profile 已禁用人工兜底") ||
+    normalized.includes("本地 FlareSolverr 预热失败") ||
+    normalized.includes("额外预热次数已耗尽") ||
+    normalized.includes("额外预热仍失败")
+  )
+}
+
+export function createBatchCheckinProgressReporter(params: {
+  verbose: boolean
+  send: (text: string) => Promise<unknown>
+  append?: (text: string) => Promise<void>
+}): (text: string) => Promise<void> {
+  return async (text: string) => {
+    await params.append?.(text)
+    if (!params.verbose && !shouldBroadcastBatchCheckinProgress(text)) {
+      return
+    }
+    await params.send(text)
+  }
+}
 
 export async function createTelegramBot(params: {
   config: ServerConfig
@@ -198,6 +231,27 @@ export async function createTelegramBot(params: {
 
   bot.command("checkin_all", async (ctx) => {
     const chatId = ctx.chat?.id
+    const input = ctx.match.trim()
+    const verbose = input.includes("-log")
+    const verboseLog = verbose
+      ? await createTaskVerboseLog({
+          diagnosticsDirectory: params.config.diagnosticsDirectory,
+          timeZone: params.config.timeZone,
+          kind: "checkin-all",
+          label: "batch",
+        })
+      : null
+    const progressReporter = createBatchCheckinProgressReporter({
+      verbose,
+      send: (text) => sendText(chatId, text),
+      append: verboseLog ? (text) => verboseLog.append(text) : undefined,
+    })
+
+    if (verboseLog) {
+      await sendText(chatId, `详细日志文件：${verboseLog.filePath}`)
+      await verboseLog.append("开始执行批量签到任务")
+    }
+
     await startTask(
       "批量签到任务",
       "checkin_all",
@@ -205,9 +259,18 @@ export async function createTelegramBot(params: {
       () =>
         params.orchestrator.runCheckinBatch({
           mode: "scheduled",
+          onProgress: progressReporter,
         }),
-      (result) => formatCheckinMessage(result, params.config.timeZone),
+      async (result) => {
+        const message = formatCheckinMessage(result, params.config.timeZone)
+        await verboseLog?.append(message)
+        return verboseLog ? `${message}\n日志文件：${verboseLog.filePath}` : message
+      },
       (text) => sendText(chatId, text),
+      (error) =>
+        verboseLog?.append(
+          `任务失败：${error instanceof Error ? error.message : String(error)}`,
+        ),
     )
   })
 
