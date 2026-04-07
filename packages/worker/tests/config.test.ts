@@ -62,6 +62,21 @@ describe("loadWorkerConfig", () => {
       timeoutMs: 90_000,
     })
   })
+
+  it("throws when local flaresolverr is enabled without a configured url", () => {
+    expect(() =>
+      loadWorkerConfig({
+        ALL_API_HUB_SERVER_URL: "https://server.example.com",
+        LOCAL_WORKER_TOKEN: "worker-token",
+        ALL_API_HUB_PRIVATE_DATA_DIR: "E:/all-api-hub-private-data",
+        GITHUB_USERNAME: "tester",
+        GITHUB_PASSWORD: "secret",
+        GITHUB_TOTP_SECRET: "JBSWY3DPEHPK3PXP",
+        LOCAL_FLARESOLVERR_ENABLED: "true",
+        LOCALAPPDATA: "C:/Users/Tester/AppData/Local",
+      }),
+    ).toThrowError("Missing required environment variable: LOCAL_FLARESOLVERR_URL")
+  })
 })
 
 describe("resolveChromiumExecutablePath", () => {
