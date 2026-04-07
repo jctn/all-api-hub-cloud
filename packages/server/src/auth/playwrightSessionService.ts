@@ -23,7 +23,10 @@ import { chromium, type BrowserContext, type Page } from "playwright"
 
 import type { ServerConfig } from "../config.js"
 import { sanitizeFileName } from "../utils/text.js"
-import { solveCloudflareChallenge } from "./flareSolverrClient.js"
+import {
+  solveCloudflareChallenge,
+  type FlareSolverrResult,
+} from "./flareSolverrClient.js"
 import { generateGitHubTotp } from "./githubTotp.js"
 import {
   matchOrDefaultSiteLoginProfile,
@@ -155,6 +158,11 @@ type LoginFlowResult =
   | { status: "unsupported_auto_reauth"; message: string }
   | { status: "failed"; code: string; message: string }
 
+interface LocalBrowserPrewarmApplyResult {
+  appliedCookies: number
+  userAgent: string | null
+}
+
 export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   constructor(
     private readonly repository: StorageRepository,
@@ -188,6 +196,29 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     await this.cleanupStaleProfileLocks(this.config.sharedSsoProfileDirectory)
     await this.reportProgress(options, "已准备浏览器数据目录并清理残留锁文件")
 
+    const requiresLocalPrewarm = this.requiresLocalFlareSolverrPrewarm(profile)
+    if (requiresLocalPrewarm && !this.shouldUseLocalFlareSolverr(profile)) {
+      await this.reportProgress(options, "命中本地 FlareSolverr 预热策略，但本地能力不可用")
+      return this.buildLocalFlareSolverrUnavailableSessionResult()
+    }
+
+    let initialPrewarmResult: FlareSolverrResult | null = null
+    if (this.shouldUseLocalFlareSolverr(profile)) {
+      await this.reportProgress(options, "命中本地 FlareSolverr 预热策略")
+      initialPrewarmResult = await this.requestLocalBrowserChallengePrewarm(
+        account,
+        profile,
+        options,
+      )
+      if (!initialPrewarmResult) {
+        return {
+          status: "failed",
+          code: "local_flaresolverr_prewarm_failed",
+          message: "本地 FlareSolverr 预热失败",
+        }
+      }
+    }
+
     let context: BrowserContext | null = null
     let page: Page | null = null
 
@@ -195,22 +226,15 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       await this.reportProgress(options, "启动 Chromium 持久化上下文")
       context = await chromium.launchPersistentContext(
         this.config.sharedSsoProfileDirectory,
-        {
-          executablePath: this.config.chromiumExecutablePath,
-          headless: this.resolveBrowserHeadless(),
-          args: this.resolveChromiumLaunchArgs(),
-          viewport: { width: 1400, height: 960 },
-        },
+        this.buildPersistentContextLaunchOptions(initialPrewarmResult?.userAgent),
       )
       page = context.pages()[0] ?? (await context.newPage())
-      await this.reportProgress(options, "浏览器上下文已启动")
 
-      if (this.shouldUseLocalFlareSolverr(profile)) {
-        await this.reportProgress(options, "命中本地 FlareSolverr 预热策略")
-        const prewarmResult = await this.prewarmLocalBrowserChallenge(
+      if (initialPrewarmResult) {
+        const prewarmResult = await this.applyLocalBrowserChallengePrewarm(
           context,
-          account,
-          profile,
+          page,
+          initialPrewarmResult,
           options,
         )
         if (!prewarmResult) {
@@ -226,6 +250,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           }
         }
       }
+      await this.reportProgress(options, "浏览器上下文已启动")
 
       await this.reportProgress(
         options,
@@ -379,6 +404,37 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     await fs.mkdir(this.config.diagnosticsDirectory, { recursive: true })
     await this.cleanupStaleProfileLocks(this.config.sharedSsoProfileDirectory)
 
+    const requiresLocalPrewarm = this.requiresLocalFlareSolverrPrewarm(profile)
+    if (requiresLocalPrewarm && !this.shouldUseLocalFlareSolverr(profile)) {
+      await this.reportProgress(options, "命中本地 FlareSolverr 预热策略，但本地能力不可用")
+      return this.buildLocalFlareSolverrUnavailableCheckinResult(account)
+    }
+
+    let initialPrewarmResult: FlareSolverrResult | null = null
+    if (this.shouldUseLocalFlareSolverr(profile)) {
+      await this.reportProgress(options, "命中本地 FlareSolverr 预热策略")
+      initialPrewarmResult = await this.requestLocalBrowserChallengePrewarm(
+        account,
+        profile,
+        options,
+      )
+      if (!initialPrewarmResult) {
+        const now = Date.now()
+        return {
+          accountId: account.id,
+          siteName: account.site_name,
+          siteUrl: account.site_url,
+          siteType: account.site_type,
+          status: CheckinResultStatus.Failed,
+          code: "local_flaresolverr_prewarm_failed",
+          message: "本地 FlareSolverr 预热失败",
+          startedAt: now,
+          completedAt: now,
+          checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
+        }
+      }
+    }
+
     let context: BrowserContext | null = null
     let page: Page | null = null
     let shouldCloseContext = true
@@ -390,21 +446,15 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     try {
       context = await chromium.launchPersistentContext(
         this.config.sharedSsoProfileDirectory,
-        {
-          executablePath: this.config.chromiumExecutablePath,
-          headless: this.resolveBrowserHeadless(),
-          args: this.resolveChromiumLaunchArgs(),
-          viewport: { width: 1400, height: 960 },
-        },
+        this.buildPersistentContextLaunchOptions(initialPrewarmResult?.userAgent),
       )
       page = context.pages()[0] ?? (await context.newPage())
 
-      if (this.shouldUseLocalFlareSolverr(profile)) {
-        await this.reportProgress(options, "命中本地 FlareSolverr 预热策略")
-        const prewarmResult = await this.prewarmLocalBrowserChallenge(
+      if (initialPrewarmResult) {
+        const prewarmResult = await this.applyLocalBrowserChallengePrewarm(
           context,
-          account,
-          profile,
+          page,
+          initialPrewarmResult,
           options,
         )
         if (!prewarmResult) {
@@ -2980,6 +3030,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     )
   }
 
+  private requiresLocalFlareSolverrPrewarm(profile: SiteLoginProfile): boolean {
+    const localProfile = this.resolveLocalBrowserProfile(profile)
+    return Boolean(localProfile && localProfile.cloudflareMode === "prewarm")
+  }
+
   private isRunAnytimeLoginPage(url: string): boolean {
     try {
       const parsed = new URL(url)
@@ -3006,18 +3061,13 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   }
 
   private shouldUseLocalFlareSolverr(profile: SiteLoginProfile): boolean {
-    const localProfile = this.resolveLocalBrowserProfile(profile)
-    if (!localProfile || localProfile.cloudflareMode !== "prewarm") {
+    if (!this.requiresLocalFlareSolverrPrewarm(profile)) {
       return false
     }
 
-    if (this.config.localFlareSolverr) {
-      return Boolean(
-        this.config.localFlareSolverr.enabled && this.config.localFlareSolverr.url,
-      )
-    }
-
-    return Boolean(this.config.flareSolverrUrl)
+    return Boolean(
+      this.config.localFlareSolverr?.enabled && this.config.localFlareSolverr.url,
+    )
   }
 
   private buildLocalFlareSolverrTargetUrl(
@@ -3041,18 +3091,59 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return joinUrl(account.site_url, targetPath)
   }
 
-  private async prewarmLocalBrowserChallenge(
-    context: BrowserContext,
+  private buildPersistentContextLaunchOptions(userAgent?: string): Parameters<
+    typeof chromium.launchPersistentContext
+  >[1] {
+    return {
+      executablePath: this.config.chromiumExecutablePath,
+      headless: this.resolveBrowserHeadless(),
+      args: this.resolveChromiumLaunchArgs(),
+      viewport: { width: 1400, height: 960 },
+      ...(userAgent ? { userAgent } : {}),
+    }
+  }
+
+  private buildLocalFlareSolverrUnavailableSessionResult(): SessionRefreshResult {
+    return {
+      status: "failed",
+      code: "local_flaresolverr_unavailable",
+      message: "本地 FlareSolverr 不可用，无法执行预热模式",
+    }
+  }
+
+  private buildLocalFlareSolverrUnavailableCheckinResult(
+    account: SiteAccount,
+  ): CheckinAccountResult {
+    const now = Date.now()
+    return {
+      accountId: account.id,
+      siteName: account.site_name,
+      siteUrl: account.site_url,
+      siteType: account.site_type,
+      status: CheckinResultStatus.Failed,
+      code: "local_flaresolverr_unavailable",
+      message: "本地 FlareSolverr 不可用，无法执行预热模式",
+      startedAt: now,
+      completedAt: now,
+      checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
+    }
+  }
+
+  private resolveLocalFlareSolverrUrl(): string | null {
+    if (!this.config.localFlareSolverr?.enabled || !this.config.localFlareSolverr.url) {
+      return null
+    }
+
+    return this.config.localFlareSolverr.url
+  }
+
+  private async requestLocalBrowserChallengePrewarm(
     account: SiteAccount,
     profile: SiteLoginProfile,
     options: SessionRefreshOptions,
     targetUrlOverride?: string,
-  ): Promise<{
-    appliedCookies: number
-    userAgent: string | null
-  } | null> {
-    const localFlareSolverrUrl =
-      this.config.localFlareSolverr?.url ?? this.config.flareSolverrUrl
+  ): Promise<FlareSolverrResult | null> {
+    const localFlareSolverrUrl = this.resolveLocalFlareSolverrUrl()
     if (!localFlareSolverrUrl) {
       return null
     }
@@ -3062,7 +3153,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       profile,
       targetUrlOverride,
     )
-    const page = context.pages()[0] ?? (await context.newPage())
 
     await this.reportProgress(options, `开始本地 FlareSolverr 预热：${targetUrl}`)
 
@@ -3085,6 +3175,20 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         return null
       }
 
+      return result
+    } catch {
+      await this.reportProgress(options, "本地 FlareSolverr 预热异常")
+      return null
+    }
+  }
+
+  private async applyLocalBrowserChallengePrewarm(
+    context: BrowserContext,
+    page: Page,
+    result: FlareSolverrResult,
+    options: SessionRefreshOptions,
+  ): Promise<LocalBrowserPrewarmApplyResult | null> {
+    try {
       await context.addCookies(
         result.cookies.map((cookie) => ({
           name: cookie.name,
@@ -3102,25 +3206,47 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         `本地 FlareSolverr 注入 ${result.cookies.length} 个 challenge cookie`,
       )
 
-      if (result.userAgent) {
+      const userAgent = result.userAgent || null
+      if (userAgent) {
         await Promise.race([
-          page.setExtraHTTPHeaders({ "User-Agent": result.userAgent }),
+          page.setExtraHTTPHeaders({ "User-Agent": userAgent }),
           new Promise((resolve) => setTimeout(resolve, 3_000)),
         ]).catch(() => undefined)
         await this.reportProgress(
           options,
-          `本地 FlareSolverr 同步 UA: ${result.userAgent.slice(0, 40)}...`,
+          `本地 FlareSolverr 同步 UA: ${userAgent.slice(0, 40)}...`,
         )
       }
 
       return {
         appliedCookies: result.cookies.length,
-        userAgent: result.userAgent ?? null,
+        userAgent,
       }
     } catch {
       await this.reportProgress(options, "本地 FlareSolverr 预热异常")
       return null
     }
+  }
+
+  private async prewarmLocalBrowserChallenge(
+    context: BrowserContext,
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
+    targetUrlOverride?: string,
+  ): Promise<LocalBrowserPrewarmApplyResult | null> {
+    const result = await this.requestLocalBrowserChallengePrewarm(
+      account,
+      profile,
+      options,
+      targetUrlOverride,
+    )
+    if (!result) {
+      return null
+    }
+
+    const page = context.pages()[0] ?? (await context.newPage())
+    return await this.applyLocalBrowserChallengePrewarm(context, page, result, options)
   }
 
   private async solveCloudflareWithFlareSolverr(

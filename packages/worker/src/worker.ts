@@ -8,8 +8,10 @@ function delay(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, timeoutMs))
 }
 
-function shouldWaitForManualAction(message: string): boolean {
-  return /人工|手动|挑战|cloudflare|turnstile/iu.test(message)
+export function shouldWaitForManualAction(message: string): boolean {
+  return /请在本机浏览器|人工接管|需人工介入|请人工|人工确认|手动处理|手动完成/iu.test(
+    message,
+  )
 }
 
 type WorkerTaskResult = Awaited<
