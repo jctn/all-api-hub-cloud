@@ -14,6 +14,10 @@ import {
 import type { WorkerConfig } from "./config.js"
 import type { WorkerRuntime } from "./runtime.js"
 
+type LocalPlaywrightSiteSessionConfig = PlaywrightSiteSessionConfig & {
+  localFlareSolverr: WorkerConfig["localFlareSolverr"]
+}
+
 function dedupeStrings(values: string[]): string[] {
   return [...new Set(values)]
 }
@@ -99,17 +103,26 @@ export class LocalBrowserTaskProcessor {
     return resolved
   }
 
-  private createLocalSessionConfig(accountId: string): PlaywrightSiteSessionConfig {
+  private createLocalSessionConfig(
+    accountId: string,
+  ): LocalPlaywrightSiteSessionConfig {
+    const localFlareSolverr = this.config.localFlareSolverr
+
     return {
       diagnosticsDirectory: this.runtime.paths.diagnosticsDirectory,
       sharedSsoProfileDirectory: this.runtime.paths.siteProfileDirectory(accountId),
       chromiumExecutablePath: this.config.chromiumExecutablePath,
       github: this.config.github,
-      flareSolverrUrl: null,
+      flareSolverrUrl:
+        localFlareSolverr.enabled && localFlareSolverr.url
+          ? localFlareSolverr.url
+          : null,
+      localFlareSolverr,
       siteLoginProfiles: this.runtime.siteLoginProfiles,
       browserHeadless: false,
       chromiumLaunchArgs: [],
       manualLoginWaitTimeoutMs: 300_000,
+      runAnytimeDebugRootOnlyPause: this.config.runAnytimeDebugRootOnlyPause,
     }
   }
 

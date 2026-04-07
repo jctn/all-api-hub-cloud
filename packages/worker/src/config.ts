@@ -4,6 +4,12 @@ import path from "node:path"
 
 import { resolveProfilesDirectory } from "@all-api-hub/core"
 
+export interface WorkerLocalFlareSolverrConfig {
+  enabled: boolean
+  url: string | null
+  timeoutMs: number
+}
+
 export interface WorkerConfig {
   serverUrl: string
   workerToken: string
@@ -24,6 +30,8 @@ export interface WorkerConfig {
   heartbeatIntervalMs: number
   claimTimeoutMs: number
   heartbeatTimeoutMs: number
+  localFlareSolverr: WorkerLocalFlareSolverrConfig
+  runAnytimeDebugRootOnlyPause: boolean
 }
 
 const WINDOWS_CHROMIUM_CANDIDATES = [
@@ -49,6 +57,40 @@ function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {
 function parseInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function parseBoolean(value: string | undefined, fallback = false): boolean {
+  if (!value) {
+    return fallback
+  }
+
+  const normalized = value.trim().toLowerCase()
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false
+  }
+  return fallback
+}
+
+function loadLocalFlareSolverrConfig(
+  env: NodeJS.ProcessEnv,
+): WorkerLocalFlareSolverrConfig {
+  const enabled = parseBoolean(env.LOCAL_FLARESOLVERR_ENABLED, false)
+  const url = env.LOCAL_FLARESOLVERR_URL?.trim() || null
+
+  if (enabled && !url) {
+    throw new Error(
+      "Missing required environment variable: LOCAL_FLARESOLVERR_URL",
+    )
+  }
+
+  return {
+    enabled,
+    url,
+    timeoutMs: parseInteger(env.LOCAL_FLARESOLVERR_TIMEOUT_MS, 90_000),
+  }
 }
 
 export function loadWorkerConfig(
@@ -84,6 +126,11 @@ export function loadWorkerConfig(
     heartbeatTimeoutMs: parseInteger(
       env.LOCAL_WORKER_HEARTBEAT_TIMEOUT_MS,
       90_000,
+    ),
+    localFlareSolverr: loadLocalFlareSolverrConfig(env),
+    runAnytimeDebugRootOnlyPause: parseBoolean(
+      env.LOCAL_WORKER_DEBUG_RUNANYTIME_ROOT_ONLY,
+      false,
     ),
   }
 }
