@@ -90,15 +90,16 @@ function normalizeLocalBrowserProfile(value: unknown): LocalBrowserProfile | und
   }
 
   const record = value as Record<string, unknown>
+  const flareSolverrTargetPath = normalizeOptionalString(record.flareSolverrTargetPath)
   return {
     cloudflareMode: normalizeLocalBrowserCloudflareMode(record.cloudflareMode),
     flareSolverrScope: normalizeLocalBrowserFlareSolverrScope(record.flareSolverrScope),
-    flareSolverrTargetPath: normalizeOptionalString(record.flareSolverrTargetPath),
     allowRetryAfterBrowserChallenge: record.allowRetryAfterBrowserChallenge === true,
     openRootBeforeCheckin: record.openRootBeforeCheckin === true,
     manualFallbackPolicy: normalizeLocalBrowserManualFallbackPolicy(
       record.manualFallbackPolicy,
     ),
+    ...(flareSolverrTargetPath ? { flareSolverrTargetPath } : {}),
   }
 }
 
@@ -119,7 +120,11 @@ function normalizeProfile(
   if (loginButtonSelectors.length === 0) {
     return null
   }
-  const localBrowser = normalizeLocalBrowserProfile(record.localBrowser)
+  const executionMode = normalizeExecutionMode(record.executionMode)
+  const localBrowser =
+    executionMode === "local-browser"
+      ? normalizeLocalBrowserProfile(record.localBrowser)
+      : undefined
 
   return {
     hostname: normalizeHostname(hostname),
@@ -131,7 +136,7 @@ function normalizeProfile(
         ? normalizeStringArray(record.tokenStorageKeys)
         : [...DEFAULT_TOKEN_STORAGE_KEYS],
     postLoginSelectors: normalizeStringArray(record.postLoginSelectors),
-    executionMode: normalizeExecutionMode(record.executionMode),
+    executionMode,
     ...(localBrowser ? { localBrowser } : {}),
   }
 }

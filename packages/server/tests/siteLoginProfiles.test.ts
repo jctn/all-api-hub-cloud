@@ -30,6 +30,7 @@ describe("site login profiles", () => {
       executionMode: "cloud",
     })
     expect(profiles["demo.example.com"].tokenStorageKeys.length).toBeGreaterThan(0)
+    expect(profiles["demo.example.com"]).not.toHaveProperty("localBrowser")
   })
 
   it("matches exact host and wildcard host", () => {
@@ -127,9 +128,31 @@ describe("site login profiles", () => {
     expect(profiles["manual.example.com"]?.localBrowser).toMatchObject({
       cloudflareMode: "off",
       flareSolverrScope: "login",
+      allowRetryAfterBrowserChallenge: false,
+      openRootBeforeCheckin: false,
       manualFallbackPolicy: "last-resort",
     })
+    expect(profiles["manual.example.com"]?.localBrowser).not.toHaveProperty(
+      "flareSolverrTargetPath",
+    )
     expect(profiles["manual.example.com"]?.executionMode).toBe("local-browser")
     expect(requiresLocalBrowserExecution(profiles["manual.example.com"])).toBe(true)
+  })
+
+  it("drops localBrowser settings when execution mode normalizes to cloud", () => {
+    const profiles = parseSiteLoginProfiles(
+      JSON.stringify({
+        "cloud.example.com": {
+          executionMode: "unexpected-mode",
+          loginButtonSelectors: ["button.login"],
+          localBrowser: {
+            cloudflareMode: "prewarm",
+          },
+        },
+      }),
+    )
+
+    expect(profiles["cloud.example.com"]?.executionMode).toBe("cloud")
+    expect(profiles["cloud.example.com"]).not.toHaveProperty("localBrowser")
   })
 })
