@@ -217,7 +217,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       if (flowResult.status !== "ready") {
         if (
           flowResult.status === "manual_action_required" &&
-          !this.shouldAllowManualFallback(profile)
+          !this.shouldAllowManualFallback(account, profile)
         ) {
           await this.reportProgress(options, "当前 profile 已禁用人工兜底，自动登录失败后直接返回")
           const diagnosticPath = await this.captureDiagnostic(page, account)
@@ -478,7 +478,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       if (flowResult.status !== "ready") {
         if (
           flowResult.status === "manual_action_required" &&
-          !this.shouldAllowManualFallback(profile)
+          !this.shouldAllowManualFallback(account, profile)
         ) {
           await this.reportProgress(options, "当前 profile 已禁用人工兜底，自动登录失败后直接返回")
           const now = Date.now()
@@ -2806,8 +2806,19 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return profile.localBrowser ?? null
   }
 
-  private shouldAllowManualFallback(profile: SiteLoginProfile): boolean {
+  private shouldAllowManualFallback(
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+  ): boolean {
     const localProfile = this.resolveLocalBrowserProfile(profile)
+    if (!localProfile) {
+      return true
+    }
+
+    if (this.isRunAnytimeSite(account)) {
+      return false
+    }
+
     return localProfile?.manualFallbackPolicy !== "disabled"
   }
 
