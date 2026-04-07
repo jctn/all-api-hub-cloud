@@ -2092,6 +2092,337 @@ describe("PlaywrightSiteSessionService", () => {
     }
   })
 
+  it("opens the runanytime root after prewarm and enters automatic login when redirected to expired login", async () => {
+    const progress: string[] = []
+    const gotoCalls: string[] = []
+    const timeline: string[] = []
+    let currentUrl = "about:blank"
+    let completeLoginFlowUrl = ""
+
+    const page = {
+      url() {
+        return currentUrl
+      },
+      async goto(url: string) {
+        gotoCalls.push(url)
+        currentUrl =
+          url === "https://runanytime.hxi.me/"
+            ? "https://runanytime.hxi.me/login?expired=true"
+            : url
+      },
+      async screenshot() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+    }
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          flareSolverrUrl: "http://127.0.0.1:8191",
+          localFlareSolverr: {
+            enabled: true,
+            url: "http://127.0.0.1:8191",
+            timeoutMs: 90_000,
+          },
+          siteLoginProfiles: {
+            "runanytime.hxi.me": {
+              hostname: "runanytime.hxi.me",
+              loginPath: "/login",
+              loginButtonSelectors: ["button.continue-linuxdo"],
+              successUrlPatterns: ["/console"],
+              tokenStorageKeys: ["access_token"],
+              postLoginSelectors: [],
+              executionMode: "local-browser",
+              localBrowser: {
+                cloudflareMode: "prewarm",
+                flareSolverrScope: "root",
+                allowRetryAfterBrowserChallenge: true,
+                openRootBeforeCheckin: true,
+                manualFallbackPolicy: "disabled",
+              },
+            },
+          },
+        } as ServerConfig & {
+          localFlareSolverr: {
+            enabled: boolean
+            url: string | null
+            timeoutMs: number
+          }
+        },
+      )
+
+      ;(
+        service as unknown as {
+          prewarmLocalBrowserChallenge: () => Promise<{
+            appliedCookies: number
+            userAgent: string | null
+          }>
+          seedBrowserContextWithAccountCookies: () => Promise<number>
+          captureAuthenticatedAccount: () => Promise<SiteAccount | null>
+          completeLoginFlow: (
+            context: unknown,
+            page: typeof page,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{ status: "ready"; page: typeof page }>
+          performBrowserSessionCheckin: (
+            page: typeof page,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{
+            status: CheckinResultStatus
+            message: string
+          }>
+        }
+      ).prewarmLocalBrowserChallenge = async () => {
+        timeline.push("prewarm")
+        return {
+          appliedCookies: 2,
+          userAgent: "ua",
+        }
+      }
+      ;(
+        service as unknown as {
+          seedBrowserContextWithAccountCookies: () => Promise<number>
+          captureAuthenticatedAccount: () => Promise<SiteAccount | null>
+          completeLoginFlow: (
+            context: unknown,
+            page: typeof page,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{ status: "ready"; page: typeof page }>
+          performBrowserSessionCheckin: (
+            page: typeof page,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{
+            status: CheckinResultStatus
+            message: string
+          }>
+        }
+      ).seedBrowserContextWithAccountCookies = async () => 2
+      ;(
+        service as unknown as {
+          captureAuthenticatedAccount: () => Promise<SiteAccount | null>
+          completeLoginFlow: (
+            context: unknown,
+            page: typeof page,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{ status: "ready"; page: typeof page }>
+          performBrowserSessionCheckin: (
+            page: typeof page,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{
+            status: CheckinResultStatus
+            message: string
+          }>
+        }
+      ).captureAuthenticatedAccount = async () => null
+      ;(
+        service as unknown as {
+          completeLoginFlow: (
+            context: unknown,
+            page: typeof page,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{ status: "ready"; page: typeof page }>
+          performBrowserSessionCheckin: (
+            page: typeof page,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{
+            status: CheckinResultStatus
+            message: string
+          }>
+        }
+      ).completeLoginFlow = async (_context, flowPage) => {
+        completeLoginFlowUrl = flowPage.url()
+        timeline.push(`flow:${completeLoginFlowUrl}`)
+        return { status: "ready", page: flowPage }
+      }
+      ;(
+        service as unknown as {
+          performBrowserSessionCheckin: (
+            page: typeof page,
+            account: SiteAccount,
+            profile: SiteLoginProfile,
+            options: { onProgress?: (message: string) => void | Promise<void> },
+          ) => Promise<{
+            status: CheckinResultStatus
+            message: string
+          }>
+        }
+      ).performBrowserSessionCheckin = async (flowPage) => {
+        timeline.push(`checkin:${flowPage.url()}`)
+        return {
+          status: CheckinResultStatus.Success,
+          message: "ok",
+        }
+      }
+
+      const result = await service.checkInWithBrowserSession(
+        {
+          ...baseAccount,
+          site_name: "随时跑路公益站",
+          site_url: "https://runanytime.hxi.me",
+          cookieAuth: {
+            sessionCookie: "session=abc123; cf_clearance=clear456",
+          },
+        },
+        {
+          onProgress(message) {
+            progress.push(message)
+          },
+        },
+      )
+
+      expect(result?.status).toBe(CheckinResultStatus.Success)
+      expect(gotoCalls[0]).toBe("https://runanytime.hxi.me/")
+      expect(gotoCalls).not.toContain("https://runanytime.hxi.me/console/personal")
+      expect(completeLoginFlowUrl).toBe("https://runanytime.hxi.me/login?expired=true")
+      expect(timeline).toEqual([
+        "prewarm",
+        "flow:https://runanytime.hxi.me/login?expired=true",
+        "checkin:https://runanytime.hxi.me/login?expired=true",
+      ])
+      expect(progress).toContain("命中本地 FlareSolverr 预热策略")
+      expect(progress).toContain("RunAnytime 先复用账号已有站点会话 cookie（2 个）")
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
+  it("fails immediately when manual fallback is disabled instead of waiting for manual login", async () => {
+    const page = {
+      url() {
+        return "https://runanytime.hxi.me/login"
+      },
+      async goto() {
+        return undefined
+      },
+      async screenshot() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+    }
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          siteLoginProfiles: {
+            "runanytime.hxi.me": {
+              hostname: "runanytime.hxi.me",
+              loginPath: "/login",
+              loginButtonSelectors: ["button.continue-linuxdo"],
+              successUrlPatterns: ["/console"],
+              tokenStorageKeys: ["access_token"],
+              postLoginSelectors: [],
+              executionMode: "local-browser",
+              localBrowser: {
+                cloudflareMode: "off",
+                flareSolverrScope: "login",
+                allowRetryAfterBrowserChallenge: true,
+                openRootBeforeCheckin: false,
+                manualFallbackPolicy: "disabled",
+              },
+            },
+          },
+        },
+      )
+
+      const waitForManualLoginCompletion = vi.fn(async () => page)
+      ;(
+        service as unknown as {
+          seedBrowserContextWithAccountCookies: () => Promise<number>
+          completeLoginFlow: () => Promise<{
+            status: "manual_action_required"
+            message: string
+          }>
+          waitForManualLoginCompletion: typeof waitForManualLoginCompletion
+        }
+      ).seedBrowserContextWithAccountCookies = async () => 0
+      ;(
+        service as unknown as {
+          completeLoginFlow: () => Promise<{
+            status: "manual_action_required"
+            message: string
+          }>
+          waitForManualLoginCompletion: typeof waitForManualLoginCompletion
+        }
+      ).completeLoginFlow = async () => ({
+        status: "manual_action_required",
+        message: "RunAnytime 登录页验证未完成，需人工介入",
+      })
+      ;(
+        service as unknown as {
+          waitForManualLoginCompletion: typeof waitForManualLoginCompletion
+        }
+      ).waitForManualLoginCompletion = waitForManualLoginCompletion
+
+      const result = await service.checkInWithBrowserSession(
+        {
+          ...baseAccount,
+          site_name: "随时跑路公益站",
+          site_url: "https://runanytime.hxi.me",
+        },
+        {},
+      )
+
+      expect(result?.status).toBe(CheckinResultStatus.Failed)
+      expect(result?.code).toBe("manual_fallback_disabled")
+      expect(waitForManualLoginCompletion).not.toHaveBeenCalled()
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
   ;[
     {
       label: "local flaresolverr is disabled",

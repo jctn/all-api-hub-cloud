@@ -215,6 +215,22 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         options,
       )
       if (flowResult.status !== "ready") {
+        if (
+          flowResult.status === "manual_action_required" &&
+          !this.shouldAllowManualFallback(profile)
+        ) {
+          await this.reportProgress(options, "当前 profile 已禁用人工兜底，自动登录失败后直接返回")
+          const diagnosticPath = await this.captureDiagnostic(page, account)
+          if (diagnosticPath) {
+            await this.reportProgress(options, `已保存诊断截图：${diagnosticPath}`)
+          }
+          return {
+            status: "failed",
+            message: flowResult.message,
+            diagnosticPath,
+          }
+        }
+
         const manualPage = await this.waitForManualLoginCompletion(
           page,
           account,
@@ -323,6 +339,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     let context: BrowserContext | null = null
     let page: Page | null = null
     let shouldCloseContext = true
+    const shouldOpenRunAnytimeRootFirst = this.shouldOpenRunAnytimeRootBeforeCheckin(
+      account,
+      profile,
+    )
 
     try {
       context = await chromium.launchPersistentContext(
@@ -359,7 +379,51 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           return await this.pauseRunAnytimeAtRootForDebug(page, account, options)
         }
 
-        if (injectedCookieCount > 0) {
+        if (shouldOpenRunAnytimeRootFirst) {
+          const runAnytimeRootUrl = joinUrl(account.site_url, "/")
+          await this.reportProgress(
+            options,
+            `RunAnytime 根页优先：预热与 cookie 注入后先打开站点根页：${runAnytimeRootUrl}`,
+          )
+          await page.goto(runAnytimeRootUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: 90_000,
+          })
+
+          const currentUrl = page.url()
+          if (this.isRunAnytimeExpiredLoginPage(currentUrl)) {
+            await this.reportProgress(
+              options,
+              "RunAnytime 根页跳转到 /login?expired=true，直接进入完整 SSO 自动登录",
+            )
+          } else if (!this.isRunAnytimeLoginPage(currentUrl)) {
+            const capturedAccount = await this.captureAuthenticatedAccount(
+              page,
+              context,
+              account,
+              profile,
+              options,
+            )
+            if (capturedAccount) {
+              await this.repository.saveAccount(capturedAccount)
+              await this.reportProgress(
+                options,
+                "RunAnytime 根页会话校验成功，切换为页面按钮签到流",
+              )
+              return await this.performBrowserSessionCheckin(
+                page,
+                capturedAccount,
+                profile,
+                options,
+              )
+            }
+
+            await this.reportProgress(
+              options,
+              "RunAnytime 根页会话未通过 /api/user/self 校验，继续尝试完整 SSO",
+            )
+          }
+        } else if (injectedCookieCount > 0) {
           await page.goto(joinUrl(account.site_url, resolveCheckInPath(account.site_type)), {
             waitUntil: "domcontentloaded",
             timeout: 90_000,
@@ -392,10 +456,17 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         }
       }
 
-      await page.goto(joinUrl(account.site_url, profile.loginPath), {
-        waitUntil: "domcontentloaded",
-        timeout: 90_000,
-      })
+      if (shouldOpenRunAnytimeRootFirst) {
+        await this.reportProgress(
+          options,
+          `RunAnytime 根页优先：沿用当前页面进入完整 SSO 自动登录：${page.url()}`,
+        )
+      } else {
+        await page.goto(joinUrl(account.site_url, profile.loginPath), {
+          waitUntil: "domcontentloaded",
+          timeout: 90_000,
+        })
+      }
 
       const flowResult = await this.completeLoginFlow(
         context,
@@ -405,6 +476,26 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         options,
       )
       if (flowResult.status !== "ready") {
+        if (
+          flowResult.status === "manual_action_required" &&
+          !this.shouldAllowManualFallback(profile)
+        ) {
+          await this.reportProgress(options, "当前 profile 已禁用人工兜底，自动登录失败后直接返回")
+          const now = Date.now()
+          return {
+            accountId: account.id,
+            siteName: account.site_name,
+            siteUrl: account.site_url,
+            siteType: account.site_type,
+            status: CheckinResultStatus.Failed,
+            code: "manual_fallback_disabled",
+            message: flowResult.message,
+            startedAt: now,
+            completedAt: now,
+            checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
+          }
+        }
+
         const manualPage = await this.waitForManualLoginCompletion(
           page,
           account,
@@ -2713,6 +2804,46 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     return profile.localBrowser ?? null
+  }
+
+  private shouldAllowManualFallback(profile: SiteLoginProfile): boolean {
+    const localProfile = this.resolveLocalBrowserProfile(profile)
+    return localProfile?.manualFallbackPolicy !== "disabled"
+  }
+
+  private shouldOpenRunAnytimeRootBeforeCheckin(
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+  ): boolean {
+    return (
+      this.isRunAnytimeSite(account) &&
+      this.resolveLocalBrowserProfile(profile)?.openRootBeforeCheckin === true
+    )
+  }
+
+  private isRunAnytimeLoginPage(url: string): boolean {
+    try {
+      const parsed = new URL(url)
+      return (
+        parsed.hostname.toLowerCase() === "runanytime.hxi.me" &&
+        parsed.pathname.includes("/login")
+      )
+    } catch {
+      return false
+    }
+  }
+
+  private isRunAnytimeExpiredLoginPage(url: string): boolean {
+    try {
+      const parsed = new URL(url)
+      return (
+        parsed.hostname.toLowerCase() === "runanytime.hxi.me" &&
+        parsed.pathname.includes("/login") &&
+        parsed.searchParams.get("expired") === "true"
+      )
+    } catch {
+      return false
+    }
   }
 
   private shouldUseLocalFlareSolverr(profile: SiteLoginProfile): boolean {
