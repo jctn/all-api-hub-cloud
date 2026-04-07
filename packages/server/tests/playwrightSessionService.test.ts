@@ -12,7 +12,10 @@ import {
 
 import type { ServerConfig } from "../src/config.js"
 import { PlaywrightSiteSessionService } from "../src/auth/playwrightSessionService.js"
-import type { SiteLoginProfile } from "../src/auth/siteLoginProfiles.js"
+import {
+  parseSiteLoginProfiles,
+  type SiteLoginProfile,
+} from "../src/auth/siteLoginProfiles.js"
 import { chromium } from "playwright"
 
 const baseAccount: SiteAccount = {
@@ -2321,6 +2324,165 @@ describe("PlaywrightSiteSessionService", () => {
     }
   })
 
+  it("reuses the runanytime root session when the root page is already authenticated", async () => {
+    const gotoCalls: string[] = []
+    const savedAccounts: SiteAccount[] = []
+    let currentUrl = "about:blank"
+
+    const capturedAccount: SiteAccount = {
+      ...baseAccount,
+      site_name: "随时跑路公益站",
+      site_url: "https://runanytime.hxi.me",
+      account_info: {
+        ...baseAccount.account_info,
+        access_token: "fresh-token",
+      },
+      cookieAuth: {
+        sessionCookie: "session=abc123; cf_clearance=clear456",
+      },
+    }
+
+    const page = {
+      url() {
+        return currentUrl
+      },
+      async goto(url: string) {
+        gotoCalls.push(url)
+        currentUrl = url
+      },
+      async screenshot() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+    }
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const repository = {
+        async saveAccount(account: SiteAccount) {
+          savedAccounts.push(account)
+        },
+      }
+      const service = new PlaywrightSiteSessionService(
+        repository as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          flareSolverrUrl: "http://127.0.0.1:8191",
+          localFlareSolverr: {
+            enabled: true,
+            url: "http://127.0.0.1:8191",
+            timeoutMs: 90_000,
+          },
+          siteLoginProfiles: {
+            "runanytime.hxi.me": {
+              hostname: "runanytime.hxi.me",
+              loginPath: "/login",
+              loginButtonSelectors: ["button.continue-linuxdo"],
+              successUrlPatterns: ["/console"],
+              tokenStorageKeys: ["access_token"],
+              postLoginSelectors: [],
+              executionMode: "local-browser",
+              localBrowser: {
+                cloudflareMode: "prewarm",
+                flareSolverrScope: "root",
+                allowRetryAfterBrowserChallenge: true,
+                openRootBeforeCheckin: true,
+                manualFallbackPolicy: "disabled",
+              },
+            },
+          },
+        } as ServerConfig & {
+          localFlareSolverr: {
+            enabled: boolean
+            url: string | null
+            timeoutMs: number
+          }
+        },
+      )
+
+      const completeLoginFlow = vi.fn(async () => {
+        throw new Error("should not continue the login flow when the root session is valid")
+      })
+      const performBrowserSessionCheckin = vi.fn(async (_page, account: SiteAccount) => ({
+        status: CheckinResultStatus.Success,
+        message: account.account_info.access_token,
+      }))
+
+      ;(
+        service as unknown as {
+          prewarmLocalBrowserChallenge: () => Promise<{
+            appliedCookies: number
+            userAgent: string | null
+          }>
+          seedBrowserContextWithAccountCookies: () => Promise<number>
+          captureAuthenticatedAccount: () => Promise<SiteAccount | null>
+          completeLoginFlow: typeof completeLoginFlow
+          performBrowserSessionCheckin: typeof performBrowserSessionCheckin
+        }
+      ).prewarmLocalBrowserChallenge = async () => ({
+        appliedCookies: 2,
+        userAgent: "ua",
+      })
+      ;(
+        service as unknown as {
+          seedBrowserContextWithAccountCookies: () => Promise<number>
+          captureAuthenticatedAccount: () => Promise<SiteAccount | null>
+          completeLoginFlow: typeof completeLoginFlow
+          performBrowserSessionCheckin: typeof performBrowserSessionCheckin
+        }
+      ).seedBrowserContextWithAccountCookies = async () => 2
+      ;(
+        service as unknown as {
+          captureAuthenticatedAccount: () => Promise<SiteAccount | null>
+          completeLoginFlow: typeof completeLoginFlow
+          performBrowserSessionCheckin: typeof performBrowserSessionCheckin
+        }
+      ).captureAuthenticatedAccount = async () => capturedAccount
+      ;(
+        service as unknown as {
+          completeLoginFlow: typeof completeLoginFlow
+          performBrowserSessionCheckin: typeof performBrowserSessionCheckin
+        }
+      ).completeLoginFlow = completeLoginFlow
+      ;(
+        service as unknown as {
+          performBrowserSessionCheckin: typeof performBrowserSessionCheckin
+        }
+      ).performBrowserSessionCheckin = performBrowserSessionCheckin
+
+      const result = await service.checkInWithBrowserSession(
+        {
+          ...capturedAccount,
+        },
+        {},
+      )
+
+      expect(result?.status).toBe(CheckinResultStatus.Success)
+      expect(gotoCalls).toEqual(["https://runanytime.hxi.me/"])
+      expect(savedAccounts).toEqual([capturedAccount])
+      expect(completeLoginFlow).not.toHaveBeenCalled()
+      expect(performBrowserSessionCheckin).toHaveBeenCalledTimes(1)
+      expect(performBrowserSessionCheckin.mock.calls[0]?.[1]).toEqual(capturedAccount)
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
   it("fails immediately when manual fallback is disabled instead of waiting for manual login", async () => {
     const page = {
       url() {
@@ -2423,6 +2585,125 @@ describe("PlaywrightSiteSessionService", () => {
     }
   })
 
+  it("allows manual fallback when runanytime explicitly sets manualFallbackPolicy to last-resort", async () => {
+    const page = {
+      url() {
+        return "https://runanytime.hxi.me/login"
+      },
+      async goto() {
+        return undefined
+      },
+      async screenshot() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+    }
+
+    const rawProfiles = JSON.stringify({
+      "runanytime.hxi.me": {
+        hostname: "runanytime.hxi.me",
+        loginPath: "/login",
+        loginButtonSelectors: ["button.continue-linuxdo"],
+        successUrlPatterns: ["/console"],
+        tokenStorageKeys: ["access_token"],
+        postLoginSelectors: [],
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "off",
+          flareSolverrScope: "login",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: false,
+          manualFallbackPolicy: "last-resort",
+        },
+      },
+    })
+    const originalSiteLoginProfilesJson = process.env.SITE_LOGIN_PROFILES_JSON
+    process.env.SITE_LOGIN_PROFILES_JSON = rawProfiles
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          siteLoginProfiles: parseSiteLoginProfiles(rawProfiles),
+        },
+      )
+
+      const waitForManualLoginCompletion = vi.fn(async () => page)
+      const performBrowserSessionCheckin = vi.fn(async () => ({
+        status: CheckinResultStatus.Success,
+        message: "ok",
+      }))
+      ;(
+        service as unknown as {
+          seedBrowserContextWithAccountCookies: () => Promise<number>
+          completeLoginFlow: () => Promise<{
+            status: "manual_action_required"
+            message: string
+          }>
+          waitForManualLoginCompletion: typeof waitForManualLoginCompletion
+          performBrowserSessionCheckin: typeof performBrowserSessionCheckin
+        }
+      ).seedBrowserContextWithAccountCookies = async () => 0
+      ;(
+        service as unknown as {
+          completeLoginFlow: () => Promise<{
+            status: "manual_action_required"
+            message: string
+          }>
+          waitForManualLoginCompletion: typeof waitForManualLoginCompletion
+          performBrowserSessionCheckin: typeof performBrowserSessionCheckin
+        }
+      ).completeLoginFlow = async () => ({
+        status: "manual_action_required",
+        message: "RunAnytime 登录页验证未完成，需人工介入",
+      })
+      ;(
+        service as unknown as {
+          waitForManualLoginCompletion: typeof waitForManualLoginCompletion
+          performBrowserSessionCheckin: typeof performBrowserSessionCheckin
+        }
+      ).waitForManualLoginCompletion = waitForManualLoginCompletion
+      ;(
+        service as unknown as {
+          performBrowserSessionCheckin: typeof performBrowserSessionCheckin
+        }
+      ).performBrowserSessionCheckin = performBrowserSessionCheckin
+
+      const result = await service.checkInWithBrowserSession(
+        {
+          ...baseAccount,
+          site_name: "随时跑路公益站",
+          site_url: "https://runanytime.hxi.me",
+        },
+        {},
+      )
+
+      expect(result?.status).toBe(CheckinResultStatus.Success)
+      expect(waitForManualLoginCompletion).toHaveBeenCalledTimes(1)
+      expect(performBrowserSessionCheckin).toHaveBeenCalledTimes(1)
+    } finally {
+      process.env.SITE_LOGIN_PROFILES_JSON = originalSiteLoginProfilesJson
+      launchSpy.mockRestore()
+    }
+  })
+
   it("defaults runanytime manual fallback to disabled when the local-browser profile omits the policy", async () => {
     const page = {
       url() {
@@ -2448,6 +2729,26 @@ describe("PlaywrightSiteSessionService", () => {
       },
     }
 
+    const rawProfiles = JSON.stringify({
+      "runanytime.hxi.me": {
+        hostname: "runanytime.hxi.me",
+        loginPath: "/login",
+        loginButtonSelectors: ["button.continue-linuxdo"],
+        successUrlPatterns: ["/console"],
+        tokenStorageKeys: ["access_token"],
+        postLoginSelectors: [],
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "off",
+          flareSolverrScope: "login",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: false,
+        },
+      },
+    })
+    const originalSiteLoginProfilesJson = process.env.SITE_LOGIN_PROFILES_JSON
+    process.env.SITE_LOGIN_PROFILES_JSON = rawProfiles
+
     const launchSpy = vi
       .spyOn(chromium, "launchPersistentContext")
       .mockResolvedValue(context as never)
@@ -2458,23 +2759,7 @@ describe("PlaywrightSiteSessionService", () => {
         {
           ...baseConfig,
           browserHeadless: false,
-          siteLoginProfiles: {
-            "runanytime.hxi.me": {
-              hostname: "runanytime.hxi.me",
-              loginPath: "/login",
-              loginButtonSelectors: ["button.continue-linuxdo"],
-              successUrlPatterns: ["/console"],
-              tokenStorageKeys: ["access_token"],
-              postLoginSelectors: [],
-              executionMode: "local-browser",
-              localBrowser: {
-                cloudflareMode: "off",
-                flareSolverrScope: "login",
-                allowRetryAfterBrowserChallenge: true,
-                openRootBeforeCheckin: false,
-              } as SiteLoginProfile["localBrowser"],
-            },
-          },
+          siteLoginProfiles: parseSiteLoginProfiles(rawProfiles),
         },
       )
 
@@ -2520,6 +2805,104 @@ describe("PlaywrightSiteSessionService", () => {
       expect(result?.code).toBe("manual_fallback_disabled")
       expect(waitForManualLoginCompletion).not.toHaveBeenCalled()
     } finally {
+      process.env.SITE_LOGIN_PROFILES_JSON = originalSiteLoginProfilesJson
+      launchSpy.mockRestore()
+    }
+  })
+
+  it("fails refreshSiteSession immediately when manual fallback is disabled", async () => {
+    const page = {
+      url() {
+        return "https://runanytime.hxi.me/login"
+      },
+      async goto() {
+        return undefined
+      },
+      async screenshot() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+    }
+
+    const rawProfiles = JSON.stringify({
+      "runanytime.hxi.me": {
+        hostname: "runanytime.hxi.me",
+        loginPath: "/login",
+        loginButtonSelectors: ["button.continue-linuxdo"],
+        successUrlPatterns: ["/console"],
+        tokenStorageKeys: ["access_token"],
+        postLoginSelectors: [],
+        executionMode: "local-browser",
+        localBrowser: {
+          cloudflareMode: "off",
+          flareSolverrScope: "login",
+          allowRetryAfterBrowserChallenge: true,
+          openRootBeforeCheckin: false,
+          manualFallbackPolicy: "disabled",
+        },
+      },
+    })
+    const originalSiteLoginProfilesJson = process.env.SITE_LOGIN_PROFILES_JSON
+    process.env.SITE_LOGIN_PROFILES_JSON = rawProfiles
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          siteLoginProfiles: parseSiteLoginProfiles(rawProfiles),
+        },
+      )
+
+      const waitForManualLoginCompletion = vi.fn(async () => page)
+      ;(
+        service as unknown as {
+          completeLoginFlow: () => Promise<{
+            status: "manual_action_required"
+            message: string
+          }>
+          waitForManualLoginCompletion: typeof waitForManualLoginCompletion
+        }
+      ).completeLoginFlow = async () => ({
+        status: "manual_action_required",
+        message: "RunAnytime 登录页验证未完成，需人工介入",
+      })
+      ;(
+        service as unknown as {
+          waitForManualLoginCompletion: typeof waitForManualLoginCompletion
+        }
+      ).waitForManualLoginCompletion = waitForManualLoginCompletion
+
+      const result = await service.refreshSiteSession(
+        {
+          ...baseAccount,
+          site_name: "随时跑路公益站",
+          site_url: "https://runanytime.hxi.me",
+        },
+        {},
+      )
+
+      expect(result.status).toBe("failed")
+      expect(result.message).toBe("RunAnytime 登录页验证未完成，需人工介入")
+      expect(waitForManualLoginCompletion).not.toHaveBeenCalled()
+    } finally {
+      process.env.SITE_LOGIN_PROFILES_JSON = originalSiteLoginProfilesJson
       launchSpy.mockRestore()
     }
   })
