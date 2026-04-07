@@ -16,7 +16,7 @@ type WorkerTaskResult = Awaited<
   ReturnType<LocalBrowserTaskProcessor["processTask"]>
 >
 
-type WorkerObservedPhase =
+export type WorkerObservedPhase =
   | "local_prewarm_strategy_hit"
   | "local_flaresolverr_check_start"
   | "local_flaresolverr_check_passed"
@@ -37,6 +37,71 @@ function appendLogFields(
     .join(" ")
 }
 
+export function resolveObservedPhasesFromProgress(
+  message: string,
+): WorkerObservedPhase[] {
+  const phases: WorkerObservedPhase[] = []
+
+  if (message.includes("命中本地 FlareSolverr 预热策略")) {
+    phases.push("local_prewarm_strategy_hit")
+  }
+
+  if (
+    message.includes("[本地 FlareSolverr] POST ") ||
+    message.includes("开始本地 FlareSolverr 预热")
+  ) {
+    phases.push("local_flaresolverr_check_start")
+  }
+
+  if (
+    message.includes("[本地 FlareSolverr] 获取 ") ||
+    message.includes("本地 FlareSolverr 注入 ")
+  ) {
+    phases.push("local_flaresolverr_check_passed")
+  }
+
+  if (message.includes("本地 FlareSolverr 注入 ")) {
+    phases.push("local_prewarm_succeeded")
+  }
+
+  if (
+    message.includes("[本地 FlareSolverr] HTTP ") ||
+    message.includes("[本地 FlareSolverr] 请求失败") ||
+    message.includes("[本地 FlareSolverr] 状态异常")
+  ) {
+    phases.push("local_flaresolverr_check_failed")
+  }
+
+  if (
+    message.includes("本地 FlareSolverr 预热失败") ||
+    message.includes("本地 FlareSolverr 预热异常")
+  ) {
+    phases.push("local_prewarm_failed")
+  }
+
+  if (message.includes("先打开站点根页")) {
+    phases.push("root_navigation")
+  }
+
+  if (
+    message.includes("打开站点登录页") ||
+    message.includes("完整 SSO 自动登录") ||
+    message.includes("准备点击 Continue with LinuxDO")
+  ) {
+    phases.push("auto_login_started")
+  }
+
+  if (
+    message.includes("目标站点已登录，开始提取会话信息") ||
+    message.includes("完整 SSO 后已同步站点会话") ||
+    message.includes("检测到目标站点已回到 ")
+  ) {
+    phases.push("auto_login_completed")
+  }
+
+  return phases
+}
+
 function logTaskPhase(
   task: LocalWorkerTask,
   phase: WorkerObservedPhase,
@@ -53,63 +118,8 @@ function logTaskPhase(
 }
 
 function logObservedProgress(task: LocalWorkerTask, message: string): void {
-  if (message.includes("命中本地 FlareSolverr 预热策略")) {
-    logTaskPhase(task, "local_prewarm_strategy_hit", { message })
-    return
-  }
-
-  if (
-    message.includes("[本地 FlareSolverr] POST ") ||
-    message.includes("开始本地 FlareSolverr 预热")
-  ) {
-    logTaskPhase(task, "local_flaresolverr_check_start", { message })
-    return
-  }
-
-  if (
-    message.includes("[本地 FlareSolverr] 获取 ") ||
-    message.includes("本地 FlareSolverr 注入 ")
-  ) {
-    logTaskPhase(task, "local_flaresolverr_check_passed", { message })
-    if (message.includes("本地 FlareSolverr 注入 ")) {
-      logTaskPhase(task, "local_prewarm_succeeded", { message })
-    }
-    return
-  }
-
-  if (
-    message.includes("[本地 FlareSolverr] HTTP ") ||
-    message.includes("[本地 FlareSolverr] 请求失败") ||
-    message.includes("[本地 FlareSolverr] 状态异常")
-  ) {
-    logTaskPhase(task, "local_flaresolverr_check_failed", { message })
-    return
-  }
-
-  if (
-    message.includes("本地 FlareSolverr 预热失败") ||
-    message.includes("本地 FlareSolverr 预热异常")
-  ) {
-    logTaskPhase(task, "local_prewarm_failed", { message })
-    return
-  }
-
-  if (message.includes("先打开站点根页")) {
-    logTaskPhase(task, "root_navigation", { message })
-    return
-  }
-
-  if (
-    message.includes("打开站点登录页") ||
-    message.includes("完整 SSO 自动登录") ||
-    message.includes("准备点击 Continue with LinuxDO")
-  ) {
-    logTaskPhase(task, "auto_login_started", { message })
-    return
-  }
-
-  if (message.includes("目标站点已登录，开始提取会话信息")) {
-    logTaskPhase(task, "auto_login_completed", { message })
+  for (const phase of resolveObservedPhasesFromProgress(message)) {
+    logTaskPhase(task, phase, { message })
   }
 }
 
