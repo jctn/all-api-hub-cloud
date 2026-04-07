@@ -82,4 +82,54 @@ describe("site login profiles", () => {
     expect(requiresLocalBrowserExecution(derived)).toBe(false)
     expect(requiresLocalBrowserExecution(null)).toBe(false)
   })
+
+  it("parses local browser cloudflare settings without affecting cloud defaults", () => {
+    const profiles = parseSiteLoginProfiles(
+      JSON.stringify({
+        "runanytime.hxi.me": {
+          executionMode: "local-browser",
+          loginButtonSelectors: ["button.login"],
+          localBrowser: {
+            cloudflareMode: "prewarm",
+            flareSolverrScope: "root",
+            flareSolverrTargetPath: "/",
+            allowRetryAfterBrowserChallenge: true,
+            openRootBeforeCheckin: true,
+            manualFallbackPolicy: "disabled",
+          },
+        },
+      }),
+    )
+
+    expect(profiles["runanytime.hxi.me"]?.localBrowser).toMatchObject({
+      cloudflareMode: "prewarm",
+      flareSolverrScope: "root",
+      flareSolverrTargetPath: "/",
+      allowRetryAfterBrowserChallenge: true,
+      openRootBeforeCheckin: true,
+      manualFallbackPolicy: "disabled",
+    })
+    expect(profiles["runanytime.hxi.me"]?.executionMode).toBe("local-browser")
+    expect(profiles["runanytime.hxi.me"]).not.toHaveProperty("cloudflareMode")
+  })
+
+  it("defaults local browser cloudflare settings to off unless explicitly enabled", () => {
+    const profiles = parseSiteLoginProfiles(
+      JSON.stringify({
+        "manual.example.com": {
+          executionMode: "local-browser",
+          loginButtonSelectors: ["button.login"],
+          localBrowser: {},
+        },
+      }),
+    )
+
+    expect(profiles["manual.example.com"]?.localBrowser).toMatchObject({
+      cloudflareMode: "off",
+      flareSolverrScope: "login",
+      manualFallbackPolicy: "last-resort",
+    })
+    expect(profiles["manual.example.com"]?.executionMode).toBe("local-browser")
+    expect(requiresLocalBrowserExecution(profiles["manual.example.com"])).toBe(true)
+  })
 })

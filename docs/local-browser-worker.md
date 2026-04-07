@@ -33,17 +33,28 @@ Zeabur server 至少要满足以下条件：
 {
   "runanytime.example.com": {
     "executionMode": "local-browser",
-    "loginPath": "/login",
-    "loginButtonSelectors": [
-      "a[href*='linux.do']",
-      "button[data-provider='github']"
-    ],
-    "successUrlPatterns": ["/console"],
-    "tokenStorageKeys": ["access_token", "token"],
-    "postLoginSelectors": [".user-avatar"]
+    "loginButtonSelectors": ["a[href*='linux.do']"]
+  },
+  "runanytime-prewarm.example.com": {
+    "executionMode": "local-browser",
+    "loginButtonSelectors": ["a[href*='linux.do']"],
+    "localBrowser": {
+      "cloudflareMode": "prewarm",
+      "flareSolverrScope": "root",
+      "flareSolverrTargetPath": "/",
+      "allowRetryAfterBrowserChallenge": true,
+      "openRootBeforeCheckin": true,
+      "manualFallbackPolicy": "disabled"
+    }
   }
 }
 ```
+
+说明：
+
+- `executionMode: "local-browser"` 只表示该站点任务会路由到本地 worker
+- 只有显式配置 `localBrowser.cloudflareMode: "prewarm"` 时，才会启用本地 FlareSolverr 预热
+- 没有 `localBrowser`，或 `localBrowser.cloudflareMode` 未写时，默认仍是 `off`
 
 ## 3. 本地环境变量
 

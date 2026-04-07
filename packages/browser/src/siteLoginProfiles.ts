@@ -1,6 +1,18 @@
 import { isAnyrouterSiteType, isNewApiFamilySiteType } from "@all-api-hub/core"
 
 export type SiteExecutionMode = "cloud" | "local-browser"
+export type LocalBrowserCloudflareMode = "off" | "prewarm"
+export type LocalBrowserFlareSolverrScope = "root" | "login" | "checkin"
+export type LocalBrowserManualFallbackPolicy = "disabled" | "last-resort"
+
+export interface LocalBrowserProfile {
+  cloudflareMode: LocalBrowserCloudflareMode
+  flareSolverrScope: LocalBrowserFlareSolverrScope
+  flareSolverrTargetPath?: string
+  allowRetryAfterBrowserChallenge: boolean
+  openRootBeforeCheckin: boolean
+  manualFallbackPolicy: LocalBrowserManualFallbackPolicy
+}
 
 export interface SiteLoginProfile {
   hostname: string
@@ -10,6 +22,7 @@ export interface SiteLoginProfile {
   tokenStorageKeys: string[]
   postLoginSelectors: string[]
   executionMode?: SiteExecutionMode
+  localBrowser?: LocalBrowserProfile
 }
 
 export type SiteLoginProfileMap = Record<string, SiteLoginProfile>
@@ -20,6 +33,10 @@ const DEFAULT_TOKEN_STORAGE_KEYS = [
   "api_token",
   "authorization",
 ]
+const DEFAULT_LOCAL_BROWSER_CLOUDFLARE_MODE: LocalBrowserCloudflareMode = "off"
+const DEFAULT_LOCAL_BROWSER_FLARESOLVERR_SCOPE: LocalBrowserFlareSolverrScope = "login"
+const DEFAULT_LOCAL_BROWSER_MANUAL_FALLBACK_POLICY: LocalBrowserManualFallbackPolicy =
+  "last-resort"
 
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -40,6 +57,51 @@ function normalizeExecutionMode(value: unknown): SiteExecutionMode {
   return value === "local-browser" ? "local-browser" : "cloud"
 }
 
+function normalizeLocalBrowserCloudflareMode(value: unknown): LocalBrowserCloudflareMode {
+  return value === "prewarm" ? "prewarm" : DEFAULT_LOCAL_BROWSER_CLOUDFLARE_MODE
+}
+
+function normalizeLocalBrowserFlareSolverrScope(
+  value: unknown,
+): LocalBrowserFlareSolverrScope {
+  return value === "root" || value === "checkin"
+    ? value
+    : DEFAULT_LOCAL_BROWSER_FLARESOLVERR_SCOPE
+}
+
+function normalizeLocalBrowserManualFallbackPolicy(
+  value: unknown,
+): LocalBrowserManualFallbackPolicy {
+  return value === "disabled" ? "disabled" : DEFAULT_LOCAL_BROWSER_MANUAL_FALLBACK_POLICY
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined
+  }
+
+  const normalized = value.trim()
+  return normalized || undefined
+}
+
+function normalizeLocalBrowserProfile(value: unknown): LocalBrowserProfile | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined
+  }
+
+  const record = value as Record<string, unknown>
+  return {
+    cloudflareMode: normalizeLocalBrowserCloudflareMode(record.cloudflareMode),
+    flareSolverrScope: normalizeLocalBrowserFlareSolverrScope(record.flareSolverrScope),
+    flareSolverrTargetPath: normalizeOptionalString(record.flareSolverrTargetPath),
+    allowRetryAfterBrowserChallenge: record.allowRetryAfterBrowserChallenge === true,
+    openRootBeforeCheckin: record.openRootBeforeCheckin === true,
+    manualFallbackPolicy: normalizeLocalBrowserManualFallbackPolicy(
+      record.manualFallbackPolicy,
+    ),
+  }
+}
+
 function normalizeProfile(
   hostname: string,
   value: unknown,
@@ -57,6 +119,7 @@ function normalizeProfile(
   if (loginButtonSelectors.length === 0) {
     return null
   }
+  const localBrowser = normalizeLocalBrowserProfile(record.localBrowser)
 
   return {
     hostname: normalizeHostname(hostname),
@@ -69,6 +132,7 @@ function normalizeProfile(
         : [...DEFAULT_TOKEN_STORAGE_KEYS],
     postLoginSelectors: normalizeStringArray(record.postLoginSelectors),
     executionMode: normalizeExecutionMode(record.executionMode),
+    ...(localBrowser ? { localBrowser } : {}),
   }
 }
 
