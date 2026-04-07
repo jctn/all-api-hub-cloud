@@ -761,4 +761,32 @@ describe("CheckinOrchestrator", () => {
       `[${baseAccount.site_name}] 结果：需人工介入；登录流程超时`,
     ])
   })
+
+  it("preserves failure codes in refreshSessions results", async () => {
+    const repository = await createRepositoryWithAccounts([baseAccount])
+
+    const refresher: SiteSessionRefresher = {
+      async refreshSiteSession(): Promise<SessionRefreshResult> {
+        return {
+          status: "failed",
+          code: "cloudflare_prewarm_exhausted",
+          message: "浏览器过程中再次命中 Cloudflare，额外预热仍失败",
+        }
+      },
+    }
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {},
+      },
+      refresher,
+    )
+
+    const result = await orchestrator.refreshSessions(baseAccount.id)
+
+    expect(result.summary.failed).toBe(1)
+    expect(result.results[0]?.status).toBe("failed")
+    expect(result.results[0]?.code).toBe("cloudflare_prewarm_exhausted")
+  })
 })

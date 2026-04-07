@@ -47,6 +47,7 @@ export interface SessionRefreshAccountResult {
   accountId: string
   siteName: string
   status: SessionRefreshResult["status"]
+  code?: string
   message: string
 }
 
@@ -380,6 +381,7 @@ export class CheckinOrchestrator {
         accountId: account.id,
         siteName: account.site_name,
         status: result.status,
+        code: result.code,
         message: result.message,
       })
       await options.onProgress?.(

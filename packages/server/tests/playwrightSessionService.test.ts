@@ -3482,14 +3482,14 @@ describe("PlaywrightSiteSessionService", () => {
       }
     }
 
-    await (service as unknown as {
+    const result = await (service as unknown as {
       completeLoginFlow: (
         context: object,
         page: typeof page,
         account: SiteAccount,
         profile: SiteLoginProfile,
         options: { onProgress?: (message: string) => void },
-      ) => Promise<{ status: string; message?: string }>
+      ) => Promise<{ status: string; code?: string; message?: string }>
     }).completeLoginFlow(
       {},
       page,
@@ -3513,6 +3513,8 @@ describe("PlaywrightSiteSessionService", () => {
     )
 
     expect(rewarmCalls).toBe(1)
+    expect(result.status).toBe("failed")
+    expect(result.code).toBe("cloudflare_prewarm_exhausted")
     expect(progress).toContain(
       "浏览器过程中再次命中 Cloudflare，尝试一次额外预热",
     )
@@ -3650,6 +3652,94 @@ describe("PlaywrightSiteSessionService", () => {
       expect(result?.status).toBe(CheckinResultStatus.Failed)
       expect(result?.code).toBe("cloudflare_prewarm_exhausted")
       expect(progress).toContain("本地 FlareSolverr 预热失败")
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
+  it("returns local_flaresolverr_prewarm_failed when the first local prewarm fails", async () => {
+    const page = {
+      url() {
+        return "https://demo.example.com/login"
+      },
+      async goto() {
+        return undefined
+      },
+      async screenshot() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+    }
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          localFlareSolverr: {
+            enabled: true,
+            url: "http://127.0.0.1:8191",
+            timeoutMs: 90_000,
+          },
+          siteLoginProfiles: {
+            "demo.example.com": {
+              hostname: "demo.example.com",
+              loginPath: "/login",
+              loginButtonSelectors: ["button.login"],
+              successUrlPatterns: ["/console"],
+              tokenStorageKeys: ["access_token"],
+              postLoginSelectors: [],
+              executionMode: "local-browser",
+              localBrowser: {
+                cloudflareMode: "prewarm",
+                flareSolverrScope: "root",
+                allowRetryAfterBrowserChallenge: true,
+                openRootBeforeCheckin: false,
+                manualFallbackPolicy: "disabled",
+              },
+            },
+          },
+        } as ServerConfig & {
+          localFlareSolverr: {
+            enabled: boolean
+            url: string | null
+            timeoutMs: number
+          }
+        },
+      )
+
+      ;(
+        service as unknown as {
+          prewarmLocalBrowserChallenge: () => Promise<null>
+          completeLoginFlow: () => Promise<{ status: "ready"; page: typeof page }>
+        }
+      ).prewarmLocalBrowserChallenge = async () => null
+      ;(
+        service as unknown as {
+          completeLoginFlow: () => Promise<{ status: "ready"; page: typeof page }>
+        }
+      ).completeLoginFlow = async () => ({ status: "ready", page })
+
+      const result = await service.checkInWithBrowserSession(baseAccount, {})
+
+      expect(result?.status).toBe(CheckinResultStatus.Failed)
+      expect(result?.code).toBe("local_flaresolverr_prewarm_failed")
     } finally {
       launchSpy.mockRestore()
     }
