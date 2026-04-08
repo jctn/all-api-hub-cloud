@@ -4159,6 +4159,175 @@ describe("PlaywrightSiteSessionService", () => {
     }
   })
 
+  it("falls back to the site root when the configured login page resolves to a blank SPA shell", async () => {
+    const progress: string[] = []
+    let currentUrl = "https://api.ouu.ch/login"
+
+    const page = {
+      isClosed() {
+        return false
+      },
+      url() {
+        return currentUrl
+      },
+      async title() {
+        return currentUrl.endsWith("/login") ? "New API" : "OuuAPI"
+      },
+      async goto(url: string) {
+        currentUrl = url
+        return undefined
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+      async evaluate() {
+        return currentUrl.endsWith("/login")
+          ? {
+              readyState: "complete",
+              rootChildren: 0,
+              rootHtmlLength: 0,
+              bodyTextLength: 42,
+              mainAppScript: "/assets/index-Br4r2xMH.js",
+            }
+          : {
+              readyState: "complete",
+              rootChildren: 1,
+              rootHtmlLength: 256,
+              bodyTextLength: 128,
+              mainAppScript: "/assets/index-C6UISEON.js",
+            }
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+    }
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      baseConfig,
+    )
+
+    ;(
+      service as unknown as {
+        detectCloudflareChallenge: () => Promise<boolean>
+        isGitHubOtpPage: () => Promise<boolean>
+        isGitHubLoginPage: () => Promise<boolean>
+        isGitHubTwoFactorChoicePage: () => Promise<boolean>
+        detectManualChallenge: () => Promise<string>
+        dismissCommonOverlays: () => Promise<void>
+        clickFirstVisibleWithPopup: () => Promise<boolean>
+        clickFirstVisible: () => Promise<boolean>
+        describeVisibleActionTexts: () => Promise<string>
+      }
+    ).detectCloudflareChallenge = async () => false
+    ;(
+      service as unknown as {
+        isGitHubOtpPage: () => Promise<boolean>
+        isGitHubLoginPage: () => Promise<boolean>
+        isGitHubTwoFactorChoicePage: () => Promise<boolean>
+        detectManualChallenge: () => Promise<string>
+        dismissCommonOverlays: () => Promise<void>
+        clickFirstVisibleWithPopup: () => Promise<boolean>
+        clickFirstVisible: () => Promise<boolean>
+        describeVisibleActionTexts: () => Promise<string>
+      }
+    ).isGitHubOtpPage = async () => false
+    ;(
+      service as unknown as {
+        isGitHubLoginPage: () => Promise<boolean>
+        isGitHubTwoFactorChoicePage: () => Promise<boolean>
+        detectManualChallenge: () => Promise<string>
+        dismissCommonOverlays: () => Promise<void>
+        clickFirstVisibleWithPopup: () => Promise<boolean>
+        clickFirstVisible: () => Promise<boolean>
+        describeVisibleActionTexts: () => Promise<string>
+      }
+    ).isGitHubLoginPage = async () => false
+    ;(
+      service as unknown as {
+        isGitHubTwoFactorChoicePage: () => Promise<boolean>
+        detectManualChallenge: () => Promise<string>
+        dismissCommonOverlays: () => Promise<void>
+        clickFirstVisibleWithPopup: () => Promise<boolean>
+        clickFirstVisible: () => Promise<boolean>
+        describeVisibleActionTexts: () => Promise<string>
+      }
+    ).isGitHubTwoFactorChoicePage = async () => false
+    ;(
+      service as unknown as {
+        detectManualChallenge: () => Promise<string>
+        dismissCommonOverlays: () => Promise<void>
+        clickFirstVisibleWithPopup: () => Promise<boolean>
+        clickFirstVisible: () => Promise<boolean>
+        describeVisibleActionTexts: () => Promise<string>
+      }
+    ).detectManualChallenge = async () => ""
+    ;(
+      service as unknown as {
+        dismissCommonOverlays: () => Promise<void>
+        clickFirstVisibleWithPopup: () => Promise<boolean>
+        clickFirstVisible: () => Promise<boolean>
+        describeVisibleActionTexts: () => Promise<string>
+      }
+    ).dismissCommonOverlays = async () => undefined
+    ;(
+      service as unknown as {
+        clickFirstVisibleWithPopup: () => Promise<boolean>
+        clickFirstVisible: () => Promise<boolean>
+        describeVisibleActionTexts: () => Promise<string>
+      }
+    ).clickFirstVisibleWithPopup = async () => false
+    ;(
+      service as unknown as {
+        clickFirstVisible: () => Promise<boolean>
+        describeVisibleActionTexts: () => Promise<string>
+      }
+    ).clickFirstVisible = async () => false
+    ;(
+      service as unknown as {
+        describeVisibleActionTexts: () => Promise<string>
+      }
+    ).describeVisibleActionTexts = async () => "无"
+
+    const result = await (
+      service as unknown as {
+        completeLoginFlow: (
+          context: typeof context,
+          page: typeof page,
+          account: SiteAccount,
+          profile: SiteLoginProfile,
+          options: { onProgress?: (message: string) => void | Promise<void> },
+        ) => Promise<{ status: string; page?: typeof page }>
+      }
+    ).completeLoginFlow(
+      context,
+      page,
+      {
+        ...baseAccount,
+        site_name: "OuuAPI",
+        site_url: "https://api.ouu.ch",
+      },
+      {
+        ...baseProfile,
+        hostname: "api.ouu.ch",
+      },
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(result.status).toBe("ready")
+    expect(currentUrl).toBe("https://api.ouu.ch")
+    expect(progress).toContain(
+      "检测到登录页疑似命中过期前端壳（main=/assets/index-Br4r2xMH.js，text=42），切换根路径重试：https://api.ouu.ch",
+    )
+  })
+
   it("treats the runanytime login page as ready once the turnstile token is populated", async () => {
     const service = new PlaywrightSiteSessionService(
       {} as StorageRepository,

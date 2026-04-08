@@ -806,6 +806,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const targetHost = new URL(account.site_url).hostname.toLowerCase()
     const linuxdoHost = new URL(this.config.github.linuxdoBaseUrl).hostname.toLowerCase()
     let deadline = Date.now() + 120_000
+    let brokenLoginRootFallbackAttempts = 0
     const visitedUrls = new Set<string>()
     const loggedSelectorDiagnostics = new Set<string>()
     const actionCooldowns = new Map<string, number>()
@@ -1100,6 +1101,39 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
       if (currentHost === targetHost) {
         await this.dismissCommonOverlays(flowPage)
+        const brokenLoginEntry = await this.inspectBrokenLoginEntry(
+          flowPage,
+          profile,
+        )
+        if (brokenLoginEntry) {
+          if (brokenLoginRootFallbackAttempts >= 2) {
+            await this.reportProgress(
+              options,
+              `登录页已连续 ${brokenLoginRootFallbackAttempts} 次命中空白壳，停止自动切根路径重试`,
+            )
+            return {
+              status: "failed",
+              code: "broken_login_entry",
+              message: "站点登录页资源异常，自动切换根路径重试后仍未恢复",
+            }
+          }
+
+          brokenLoginRootFallbackAttempts += 1
+          const fallbackUrl = normalizeBaseUrl(account.site_url)
+          await this.reportProgress(
+            options,
+            `检测到登录页疑似命中过期前端壳（main=${brokenLoginEntry.mainAppScript}，text=${brokenLoginEntry.bodyTextLength}），切换根路径重试：${fallbackUrl}`,
+          )
+          visitedUrls.clear()
+          loggedSelectorDiagnostics.clear()
+          actionCooldowns.clear()
+          await flowPage.goto(fallbackUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: 60_000,
+          })
+          await flowPage.waitForTimeout(1_000)
+          continue
+        }
         if (this.isRunAnytimeSite(account) && this.getUrlPathname(currentUrl).includes("/login")) {
           const ready = await this.prepareRunAnytimeLoginPage(
             context,
@@ -3603,6 +3637,59 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return !pathname.includes("/login") && !pathname.includes("/auth")
   }
 
+  private async inspectBrokenLoginEntry(
+    page: Page,
+    profile: SiteLoginProfile,
+  ): Promise<{
+    mainAppScript: string
+    bodyTextLength: number
+  } | null> {
+    const currentPath = this.normalizeComparablePath(this.getUrlPathname(page.url()))
+    const loginPath = this.normalizeComparablePath(profile.loginPath)
+    if (!loginPath || loginPath === "/" || currentPath !== loginPath) {
+      return null
+    }
+
+    const snapshot = await page
+      .evaluate(() => {
+        const root = document.getElementById("root")
+        const bodyText = document.body?.innerText?.trim() || ""
+        const mainAppScript =
+          Array.from(document.querySelectorAll("script[src]"))
+            .map((item) => item.getAttribute("src") || "")
+            .find((src) => /\/assets\/index-[^/]+\.js(?:[?#].*)?$/iu.test(src)) || ""
+
+        return {
+          readyState: document.readyState,
+          rootChildren: root?.children.length ?? 0,
+          rootHtmlLength: root?.innerHTML.length ?? 0,
+          bodyTextLength: bodyText.length,
+          mainAppScript,
+        }
+      })
+      .catch(() => null)
+
+    if (!snapshot) {
+      return null
+    }
+
+    const looksLikeBrokenSpaShell =
+      snapshot.readyState === "complete" &&
+      Boolean(snapshot.mainAppScript) &&
+      snapshot.rootChildren === 0 &&
+      snapshot.rootHtmlLength === 0 &&
+      snapshot.bodyTextLength <= 80
+
+    if (!looksLikeBrokenSpaShell) {
+      return null
+    }
+
+    return {
+      mainAppScript: snapshot.mainAppScript,
+      bodyTextLength: snapshot.bodyTextLength,
+    }
+  }
+
   private async isGitHubLoginPage(page: Page): Promise<boolean> {
     return (
       this.getUrlPathname(page.url()) === "/login" ||
@@ -4448,6 +4535,15 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     } catch {
       return ""
     }
+  }
+
+  private normalizeComparablePath(pathname: string): string {
+    const normalized = pathname.trim().toLowerCase()
+    if (!normalized || normalized === "/") {
+      return "/"
+    }
+
+    return normalized.replace(/\/+$/u, "") || "/"
   }
 
   private escapeRegex(value: string): string {
