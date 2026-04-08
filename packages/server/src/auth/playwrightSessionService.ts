@@ -967,6 +967,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const loggedSelectorDiagnostics = new Set<string>()
     const actionCooldowns = new Map<string, number>()
     const callbackWaits = new Set<string>()
+    const callbackChallengeRecoveries = new Set<string>()
     let linuxdoSsoRestartAttempts = 0
     let flareSolverrAttempts = 0
     let browserChallengePrewarmUsed = false
@@ -1031,6 +1032,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         loggedSelectorDiagnostics.clear()
         actionCooldowns.clear()
         callbackWaits.clear()
+        callbackChallengeRecoveries.clear()
         flareSolverrAttempts = 0
         await flowPage.goto(joinUrl(account.site_url, profile.loginPath), {
           waitUntil: "domcontentloaded",
@@ -1043,6 +1045,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       const isLinuxDoGitHubCallbackPage =
         this.isSameOrSubdomain(currentHost, linuxdoHost) &&
         this.getUrlPathname(currentUrl).includes("/auth/github/callback")
+      const callbackChallengeRecoveryKey = isLinuxDoGitHubCallbackPage
+        ? this.stripCfChallengeParams(currentUrl)
+        : ""
 
       if (isLinuxDoGitHubCallbackPage && !callbackWaits.has(currentUrl)) {
         callbackWaits.add(currentUrl)
@@ -1059,6 +1064,21 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       }
 
       if (await this.detectCloudflareChallenge(flowPage)) {
+        if (
+          isLinuxDoGitHubCallbackPage &&
+          callbackWaits.has(currentUrl) &&
+          callbackChallengeRecoveries.has(callbackChallengeRecoveryKey)
+        ) {
+          await this.reportProgress(
+            options,
+            "Linux.do GitHub callback 在 Cloudflare 自动破解后仍未回跳，停止自动重试，避免回调页循环",
+          )
+          return {
+            status: "manual_action_required",
+            message: "Linux.do GitHub callback 持续停留在质询页，已停止自动重试",
+          }
+        }
+
         if (this.shouldRetryBrowserChallengeWithLocalPrewarm(profile)) {
           if (browserChallengePrewarmUsed) {
             const exhaustedMsg =
@@ -1147,6 +1167,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         }
 
         if (flareSolverrAttempts < MAX_FLARESOLVERR_ATTEMPTS && this.config.flareSolverrUrl) {
+          if (isLinuxDoGitHubCallbackPage && callbackWaits.has(currentUrl)) {
+            callbackChallengeRecoveries.add(callbackChallengeRecoveryKey)
+          }
           flareSolverrAttempts++
           if (await this.solveCloudflareWithFlareSolverr(context, flowPage, options)) {
             deadline = Math.max(
