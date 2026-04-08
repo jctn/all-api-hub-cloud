@@ -31,7 +31,6 @@ const TELEGRAM_COMMANDS = [
   { command: "checkin_all", description: "批量签到全部账号" },
   { command: "checkin", description: "单账号签到" },
   { command: "auth_refresh", description: "刷新账号会话" },
-  { command: "account_refresh", description: "强制重载账号文件" },
   { command: "disable", description: "禁用账号" },
   { command: "enable", description: "启用账号" },
 ] as const
@@ -43,11 +42,10 @@ const TELEGRAM_HELP_LINES = [
   "/accounts — 查看账号列表",
   "/status — 查看系统状态与任务信息",
   "/version — 查看版本与部署信息",
-  "/sync_import — 从 GitHub 仓库同步导入账号",
+  "/sync_import [-force] — 从 GitHub 仓库同步导入账号",
   "/checkin_all [-log] — 批量签到全部可签到账号（-log 输出详细日志）",
   "/checkin <accountId|siteName> [-log] — 单账号签到（-log 输出详细日志）",
   "/auth_refresh <accountId|siteName|all> [-log] — 刷新账号会话（-log 输出详细日志）",
-  "/account_refresh [all] [-log] — 强制重新导入 GitHub 账号备份文件",
   "/disable <accountId|siteName> — 禁用账号（不再签到和刷新）",
   "/enable <accountId|siteName> — 启用账号",
 ] as const
@@ -219,11 +217,18 @@ export async function createTelegramBot(params: {
 
   bot.command("sync_import", async (ctx) => {
     const chatId = ctx.chat?.id
+    const input = ctx.match.trim()
+    const force = /(?:^|\s)-force(?:\s|$)/iu.test(input)
+    const remainingInput = input.replace(/(?:^|\s)-force(?=\s|$)/giu, " ").trim()
+    if (remainingInput) {
+      await sendText(chatId, "用法：/sync_import [-force]")
+      return
+    }
     await startTask(
       "同步导入任务",
       "sync_import",
-      "从 GitHub 仓库同步账号 JSON",
-      () => params.importer.syncFromRepo(),
+      force ? "强制从 GitHub 仓库同步账号 JSON" : "从 GitHub 仓库同步账号 JSON",
+      () => params.importer.syncFromRepo(force ? { force: true } : undefined),
       (result) => formatImportMessage(result, params.config.timeZone),
       (text) => sendText(chatId, text),
     )
@@ -360,48 +365,6 @@ export async function createTelegramBot(params: {
         }),
       (result) => formatRefreshMessage(result, params.config.timeZone),
       (text) => sendText(chatId, text),
-    )
-  })
-
-  bot.command("account_refresh", async (ctx) => {
-    const chatId = ctx.chat?.id
-    const input = ctx.match.trim()
-    const verbose = input.includes("-log")
-    const cleanInput = input.replace(/-log/gi, "").trim()
-    if (cleanInput && cleanInput.toLowerCase() !== "all") {
-      await sendText(chatId, "用法：/account_refresh [all] [-log]")
-      return
-    }
-
-    const verboseLog = verbose
-      ? await createTaskVerboseLog({
-          diagnosticsDirectory: params.config.diagnosticsDirectory,
-          timeZone: params.config.timeZone,
-          kind: "account-refresh",
-          label: "import",
-        })
-      : null
-
-    if (verboseLog) {
-      await sendText(chatId, `详细日志文件：${verboseLog.filePath}`)
-      await verboseLog.append("开始强制重新导入 GitHub 账号备份文件")
-    }
-
-    await startTask(
-      "账号文件重载任务",
-      "account_refresh",
-      "强制重新导入 GitHub 账号 JSON",
-      () => params.importer.syncFromRepo({ force: true }),
-      async (result) => {
-        const message = formatImportMessage(result, params.config.timeZone)
-        await verboseLog?.append(message)
-        return verboseLog ? `${message}\n日志文件：${verboseLog.filePath}` : message
-      },
-      (text) => sendText(chatId, text),
-      (error) =>
-        verboseLog?.append(
-          `任务失败：${error instanceof Error ? error.message : String(error)}`,
-        ),
     )
   })
 
