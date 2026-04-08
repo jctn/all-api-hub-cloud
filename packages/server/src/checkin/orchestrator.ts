@@ -3,6 +3,7 @@ import crypto from "node:crypto"
 import {
   CheckinResultStatus,
   executeCheckinAccount,
+  fetchNewApiSelf,
   fetchNewApiTodayIncome,
   hasUsableAuth,
   isAnyrouterSiteType,
@@ -39,6 +40,10 @@ export interface CheckinExecutionController {
   runCheckinBatch(
     options: BatchCheckinRunOptions,
   ): Promise<BatchCheckinRunResult>
+  refreshAccountSnapshots(
+    accountId?: string,
+    options?: AccountSnapshotRefreshRunOptions,
+  ): Promise<AccountSnapshotRefreshRunResult>
   refreshSessions(
     accountId?: string,
     options?: SessionRefreshRunOptions,
@@ -75,6 +80,30 @@ export interface SessionRefreshRunResult {
 }
 
 export interface SessionRefreshRunOptions {
+  onProgress?: (message: string) => Promise<void> | void
+}
+
+export interface AccountSnapshotRefreshAccountResult {
+  accountId: string
+  siteName: string
+  status: "updated" | "failed" | "skipped"
+  code?: string
+  message: string
+}
+
+export interface AccountSnapshotRefreshRunResult {
+  startedAt: number
+  completedAt: number
+  summary: {
+    total: number
+    updated: number
+    failed: number
+    skipped: number
+  }
+  results: AccountSnapshotRefreshAccountResult[]
+}
+
+export interface AccountSnapshotRefreshRunOptions {
   onProgress?: (message: string) => Promise<void> | void
 }
 
@@ -418,6 +447,107 @@ export class CheckinOrchestrator {
         manualActionRequired: 0,
         unsupportedAutoReauth: 0,
         failed: 0,
+      },
+    )
+
+    return {
+      startedAt,
+      completedAt: Date.now(),
+      summary,
+      results,
+    }
+  }
+
+  async refreshAccountSnapshots(
+    accountId?: string,
+    options: AccountSnapshotRefreshRunOptions = {},
+  ): Promise<AccountSnapshotRefreshRunResult> {
+    const allAccounts = await this.repository.getAccounts()
+    const selectedAccounts = accountId
+      ? allAccounts.filter((account) => account.id === accountId)
+      : allAccounts.filter((account) => !account.disabled)
+    return this.refreshAccountSnapshotsForAccounts(selectedAccounts, options)
+  }
+
+  async refreshAccountSnapshotsForAccounts(
+    selectedAccounts: SiteAccount[],
+    options: AccountSnapshotRefreshRunOptions = {},
+  ): Promise<AccountSnapshotRefreshRunResult> {
+    const startedAt = Date.now()
+    const results: AccountSnapshotRefreshAccountResult[] = []
+
+    for (const [index, account] of selectedAccounts.entries()) {
+      await options.onProgress?.(
+        `刷新进度 (${index + 1}/${selectedAccounts.length})：${account.site_name} (${account.id})`,
+      )
+
+      if (!isSupportedCheckinSiteType(account.site_type)) {
+        const result: AccountSnapshotRefreshAccountResult = {
+          accountId: account.id,
+          siteName: account.site_name,
+          status: "skipped",
+          code: "unsupported_site",
+          message: "已跳过：站点暂不支持",
+        }
+        results.push(result)
+        await options.onProgress?.(`[${account.site_name}] ${result.message}`)
+        continue
+      }
+
+      if (!hasUsableAuth(account)) {
+        const result: AccountSnapshotRefreshAccountResult = {
+          accountId: account.id,
+          siteName: account.site_name,
+          status: "skipped",
+          code: "missing_auth",
+          message: "已跳过：缺少可用认证信息",
+        }
+        results.push(result)
+        await options.onProgress?.(`[${account.site_name}] ${result.message}`)
+        continue
+      }
+
+      const synced = await fetchNewApiSelf({
+        account,
+        fetchImpl: this.fetchImpl,
+      })
+      if (!synced) {
+        const result: AccountSnapshotRefreshAccountResult = {
+          accountId: account.id,
+          siteName: account.site_name,
+          status: "failed",
+          code: "snapshot_refresh_failed",
+          message: "刷新失败，请检查登录状态或站点接口",
+        }
+        results.push(result)
+        await options.onProgress?.(`[${account.site_name}] ${result.message}`)
+        continue
+      }
+
+      await this.repository.saveAccount(synced)
+      const result: AccountSnapshotRefreshAccountResult = {
+        accountId: account.id,
+        siteName: account.site_name,
+        status: "updated",
+        message: "账号数据已刷新",
+      }
+      results.push(result)
+      await options.onProgress?.(`[${account.site_name}] ${result.message}`)
+    }
+
+    const summary = results.reduce(
+      (current, result) => {
+        current.total += 1
+        if (result.status === "updated") current.updated += 1
+        if (result.status === "failed") current.failed += 1
+        if (result.status === "skipped") current.skipped += 1
+        return current
+      },
+      {
+        total: 0,
+        updated: 0,
+        failed: 0,
+        skipped: 0,
       },
     )
 

@@ -789,4 +789,160 @@ describe("CheckinOrchestrator", () => {
     expect(result.results[0]?.status).toBe("failed")
     expect(result.results[0]?.code).toBe("cloudflare_prewarm_exhausted")
   })
+
+  it("refreshes account snapshots and persists synced account data", async () => {
+    const repository = await createRepositoryWithAccounts([baseAccount])
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {},
+      },
+      {
+        async refreshSiteSession(): Promise<SessionRefreshResult> {
+          return {
+            status: "failed",
+            message: "should not refresh session during account snapshot refresh",
+          }
+        },
+      },
+      async (input) => {
+        if (String(input).endsWith("/api/user/self")) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                id: 99,
+                username: "synced-user",
+                quota: 123.45,
+                today_quota_consumption: 23.45,
+                today_requests_count: 12,
+              },
+            }),
+            { status: 200 },
+          )
+        }
+
+        return new Response("not found", { status: 404 })
+      },
+    )
+
+    const result = await orchestrator.refreshAccountSnapshots(baseAccount.id)
+    const saved = await repository.getAccountById(baseAccount.id)
+
+    expect(result.summary.updated).toBe(1)
+    expect(result.summary.failed).toBe(0)
+    expect(result.summary.skipped).toBe(0)
+    expect(result.results[0]).toMatchObject({
+      accountId: baseAccount.id,
+      siteName: baseAccount.site_name,
+      status: "updated",
+      message: "账号数据已刷新",
+    })
+    expect(saved?.account_info.id).toBe(99)
+    expect(saved?.account_info.username).toBe("synced-user")
+    expect(saved?.account_info.quota).toBe(123.45)
+    expect(saved?.account_info.today_quota_consumption).toBe(23.45)
+    expect(saved?.account_info.today_requests_count).toBe(12)
+  })
+
+  it("skips unsupported or missing-auth accounts during account snapshot refresh", async () => {
+    const unsupportedAccount: SiteAccount = {
+      ...baseAccount,
+      id: "acc-unsupported",
+      site_name: "Unsupported",
+      site_type: "unsupported-site",
+    }
+    const missingAuthAccount: SiteAccount = {
+      ...baseAccount,
+      id: "acc-missing-auth",
+      site_name: "Needs Login",
+      account_info: {
+        ...baseAccount.account_info,
+        access_token: "",
+      },
+      authType: AuthType.Cookie,
+    }
+    const repository = await createRepositoryWithAccounts([
+      unsupportedAccount,
+      missingAuthAccount,
+    ])
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {},
+      },
+      {
+        async refreshSiteSession(): Promise<SessionRefreshResult> {
+          return {
+            status: "failed",
+            message: "should not refresh session during account snapshot refresh",
+          }
+        },
+      },
+    )
+
+    const result = await orchestrator.refreshAccountSnapshots(undefined)
+
+    expect(result.summary.updated).toBe(0)
+    expect(result.summary.failed).toBe(0)
+    expect(result.summary.skipped).toBe(2)
+    expect(result.results).toEqual([
+      {
+        accountId: unsupportedAccount.id,
+        siteName: unsupportedAccount.site_name,
+        status: "skipped",
+        code: "unsupported_site",
+        message: "已跳过：站点暂不支持",
+      },
+      {
+        accountId: missingAuthAccount.id,
+        siteName: missingAuthAccount.site_name,
+        status: "skipped",
+        code: "missing_auth",
+        message: "已跳过：缺少可用认证信息",
+      },
+    ])
+  })
+
+  it("emits progress messages during account snapshot refresh", async () => {
+    const repository = await createRepositoryWithAccounts([baseAccount])
+    const progress: string[] = []
+
+    const orchestrator = new CheckinOrchestrator(
+      repository,
+      {
+        siteLoginProfiles: {},
+      },
+      {
+        async refreshSiteSession(): Promise<SessionRefreshResult> {
+          return {
+            status: "failed",
+            message: "should not refresh session during account snapshot refresh",
+          }
+        },
+      },
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: false,
+            message: "unauthorized",
+          }),
+          { status: 401 },
+        ),
+    )
+
+    const result = await orchestrator.refreshAccountSnapshots(baseAccount.id, {
+      onProgress: async (message) => {
+        progress.push(message)
+      },
+    })
+
+    expect(result.summary.failed).toBe(1)
+    expect(progress).toEqual([
+      `刷新进度 (1/1)：${baseAccount.site_name} (${baseAccount.id})`,
+      `[${baseAccount.site_name}] 刷新失败，请检查登录状态或站点接口`,
+    ])
+  })
 })
