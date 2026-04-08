@@ -5253,6 +5253,144 @@ describe("PlaywrightSiteSessionService", () => {
     expect(waitedTimeoutMs).toBe(8_000)
   })
 
+  it("tries FlareSolverr before giving up when Linux.do callback stays on a challenge page", async () => {
+    const progress: string[] = []
+    let currentUrl = "https://linux.do/auth/github/callback?code=demo"
+    let waitCalls = 0
+    let findTargetPageCalls = 0
+    let solverCalls = 0
+    const waitedTransitions: Array<{ fromUrl: string; timeoutMs: number }> = []
+
+    const page = {
+      isClosed() {
+        return false
+      },
+      url() {
+        return currentUrl
+      },
+      async title() {
+        return currentUrl.includes("/auth/github/callback")
+          ? "Just a moment..."
+          : "OuuAPI"
+      },
+      async evaluate() {
+        return {
+          readyState: "complete",
+          rootChildren: 1,
+          rootHtmlLength: 128,
+          bodyTextLength: 24,
+          mainAppScript: "/assets/index-ok.js",
+          mainAppScriptStatus: 200,
+        }
+      },
+      async waitForTimeout() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+    }
+
+    const service = new PlaywrightSiteSessionService(
+      {} as StorageRepository,
+      {
+        ...baseConfig,
+        flareSolverrUrl: "http://127.0.0.1:8191",
+      },
+    )
+    const runtime = service as unknown as {
+      findTargetPage: () => Promise<Page | null>
+      detectCloudflareChallenge: () => Promise<boolean>
+      solveCloudflareWithFlareSolverr: () => Promise<boolean>
+      isGitHubOtpPage: () => Promise<boolean>
+      isGitHubLoginPage: () => Promise<boolean>
+      isGitHubTwoFactorChoicePage: () => Promise<boolean>
+      detectManualChallenge: () => Promise<string>
+      dismissCommonOverlays: () => Promise<void>
+      clickFirstVisibleWithPopup: () => Promise<boolean>
+      waitForFlowTransition: (
+        page: typeof page,
+        fromUrl: string,
+        timeoutMs: number,
+      ) => Promise<void>
+      completeLoginFlow: (
+        context: typeof context,
+        page: typeof page,
+        account: SiteAccount,
+        profile: SiteLoginProfile,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+      ) => Promise<{ status: string; page?: Page }>
+    }
+
+    Object.assign(runtime, {
+      findTargetPage: async () => {
+        findTargetPageCalls += 1
+        return findTargetPageCalls >= 3 ? (page as unknown as Page) : null
+      },
+      detectCloudflareChallenge: async () =>
+        currentUrl.includes("/auth/github/callback"),
+      solveCloudflareWithFlareSolverr: async () => {
+        solverCalls += 1
+        return true
+      },
+      isGitHubOtpPage: async () => false,
+      isGitHubLoginPage: async () => false,
+      isGitHubTwoFactorChoicePage: async () => false,
+      detectManualChallenge: async () => "",
+      dismissCommonOverlays: async () => undefined,
+      clickFirstVisibleWithPopup: async () => false,
+      waitForFlowTransition: async (_page, fromUrl, timeoutMs) => {
+        waitedTransitions.push({ fromUrl, timeoutMs })
+        waitCalls += 1
+        if (waitCalls >= 2) {
+          currentUrl = "https://api.ouu.ch/console/personal"
+        }
+      },
+    })
+
+    const result = await runtime.completeLoginFlow(
+      context,
+      page,
+      {
+        ...baseAccount,
+        site_name: "OuuAPI",
+        site_url: "https://api.ouu.ch",
+      },
+      {
+        ...baseProfile,
+        hostname: "api.ouu.ch",
+      },
+      {
+        onProgress(message) {
+          progress.push(message)
+        },
+      },
+    )
+
+    expect(result.status).toBe("ready")
+    expect(solverCalls).toBe(1)
+    expect(waitedTransitions).toEqual([
+      {
+        fromUrl: "https://linux.do/auth/github/callback?code=demo",
+        timeoutMs: 60_000,
+      },
+      {
+        fromUrl: "https://linux.do/auth/github/callback?code=demo",
+        timeoutMs: 20_000,
+      },
+    ])
+    expect(progress).toContain("Cloudflare 自动破解成功，延长登录流程等待窗口 120 秒")
+    expect(progress).toContain(
+      "Linux.do GitHub callback Cloudflare 已放行，继续等待页面回跳（最多 20 秒）",
+    )
+    expect(progress).not.toContain(
+      "Linux.do GitHub callback 持续停留在质询页，停止自动重试，避免回调页循环",
+    )
+  })
+
   it.skip("extracts oauth state from a FlareSolverr html response payload", async () => {
     const service = new PlaywrightSiteSessionService(
       {} as StorageRepository,

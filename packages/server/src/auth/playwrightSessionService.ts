@@ -1040,11 +1040,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         continue
       }
 
-      if (
+      const isLinuxDoGitHubCallbackPage =
         this.isSameOrSubdomain(currentHost, linuxdoHost) &&
-        this.getUrlPathname(currentUrl).includes("/auth/github/callback") &&
-        !callbackWaits.has(currentUrl)
-      ) {
+        this.getUrlPathname(currentUrl).includes("/auth/github/callback")
+
+      if (isLinuxDoGitHubCallbackPage && !callbackWaits.has(currentUrl)) {
         callbackWaits.add(currentUrl)
         await this.reportProgress(
           options,
@@ -1056,21 +1056,6 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           RUN_ANYTIME_LINUXDO_CALLBACK_WAIT_MS,
         )
         continue
-      }
-
-      if (
-        this.isSameOrSubdomain(currentHost, linuxdoHost) &&
-        this.getUrlPathname(currentUrl).includes("/auth/github/callback") &&
-        callbackWaits.has(currentUrl)
-      ) {
-        await this.reportProgress(
-          options,
-          "Linux.do GitHub callback 持续停留在质询页，停止自动重试，避免回调页循环",
-        )
-        return {
-          status: "manual_action_required",
-          message: "Linux.do GitHub callback 持续停留在质询页，已停止自动重试",
-        }
       }
 
       if (await this.detectCloudflareChallenge(flowPage)) {
@@ -1172,13 +1157,37 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               options,
               `Cloudflare 自动破解成功，延长登录流程等待窗口 ${LINUXDO_SSO_DEADLINE_EXTENSION_MS / 1000} 秒`,
             )
-            await flowPage.waitForTimeout(3_000)
+            if (isLinuxDoGitHubCallbackPage && callbackWaits.has(currentUrl)) {
+              const callbackUrlAfterSolver = flowPage.url()
+              await this.reportProgress(
+                options,
+                `Linux.do GitHub callback Cloudflare 已放行，继续等待页面回跳（最多 ${LINUXDO_CALLBACK_WAIT_MS / 1000} 秒）`,
+              )
+              await this.waitForFlowTransition(
+                flowPage,
+                callbackUrlAfterSolver,
+                LINUXDO_CALLBACK_WAIT_MS,
+              )
+            } else {
+              await flowPage.waitForTimeout(3_000)
+            }
             continue
           }
         }
         const cfMsg = "登录流程遇到 Cloudflare / Turnstile / CAPTCHA，需人工介入"
         await this.reportProgress(options, cfMsg)
         return { status: "manual_action_required", message: cfMsg }
+      }
+
+      if (isLinuxDoGitHubCallbackPage && callbackWaits.has(currentUrl)) {
+        await this.reportProgress(
+          options,
+          "Linux.do GitHub callback 持续停留在质询页，停止自动重试，避免回调页循环",
+        )
+        return {
+          status: "manual_action_required",
+          message: "Linux.do GitHub callback 持续停留在质询页，已停止自动重试",
+        }
       }
 
       if (currentHost === "github.com" && (await this.isGitHubOtpPage(flowPage))) {
