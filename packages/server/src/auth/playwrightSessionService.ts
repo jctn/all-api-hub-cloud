@@ -1167,11 +1167,22 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         }
 
         if (flareSolverrAttempts < MAX_FLARESOLVERR_ATTEMPTS && this.config.flareSolverrUrl) {
+          const solverTargetUrl =
+            isLinuxDoGitHubCallbackPage && callbackWaits.has(currentUrl)
+              ? this.config.github.linuxdoBaseUrl
+              : undefined
           if (isLinuxDoGitHubCallbackPage && callbackWaits.has(currentUrl)) {
             callbackChallengeRecoveries.add(callbackChallengeRecoveryKey)
           }
           flareSolverrAttempts++
-          if (await this.solveCloudflareWithFlareSolverr(context, flowPage, options)) {
+          if (
+            await this.solveCloudflareWithFlareSolverr(
+              context,
+              flowPage,
+              options,
+              solverTargetUrl,
+            )
+          ) {
             deadline = Math.max(
               deadline,
               Date.now() + LINUXDO_SSO_DEADLINE_EXTENSION_MS,
@@ -1184,7 +1195,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               const callbackUrlAfterSolver = flowPage.url()
               await this.reportProgress(
                 options,
-                `Linux.do GitHub callback Cloudflare 已放行，继续等待页面回跳（最多 ${LINUXDO_CALLBACK_WAIT_MS / 1000} 秒）`,
+                `Linux.do GitHub callback 已完成 Cloudflare 自动解题尝试，继续等待页面回跳（最多 ${LINUXDO_CALLBACK_WAIT_MS / 1000} 秒）`,
               )
               await this.waitForFlowTransition(
                 flowPage,
@@ -3847,6 +3858,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     context: BrowserContext,
     page: Page,
     options: SessionRefreshOptions,
+    solverTargetUrl?: string,
   ): Promise<boolean> {
     if (!this.config.flareSolverrUrl) return false
 
@@ -3858,7 +3870,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
       const result = await solveCloudflareChallenge(
         this.config.flareSolverrUrl,
-        page.url(),
+        solverTargetUrl ?? page.url(),
         this.fetchImpl,
         (msg) => this.reportProgress(options, `[FlareSolverr] ${msg}`),
       )

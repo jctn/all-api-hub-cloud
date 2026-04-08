@@ -5259,6 +5259,7 @@ describe("PlaywrightSiteSessionService", () => {
     let waitCalls = 0
     let findTargetPageCalls = 0
     let solverCalls = 0
+    let solverTargetUrl = ""
     const waitedTransitions: Array<{ fromUrl: string; timeoutMs: number }> = []
 
     const page = {
@@ -5304,7 +5305,12 @@ describe("PlaywrightSiteSessionService", () => {
     const runtime = service as unknown as {
       findTargetPage: () => Promise<Page | null>
       detectCloudflareChallenge: () => Promise<boolean>
-      solveCloudflareWithFlareSolverr: () => Promise<boolean>
+      solveCloudflareWithFlareSolverr: (
+        context: typeof context,
+        page: typeof page,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+        solverTargetUrl?: string,
+      ) => Promise<boolean>
       isGitHubOtpPage: () => Promise<boolean>
       isGitHubLoginPage: () => Promise<boolean>
       isGitHubTwoFactorChoicePage: () => Promise<boolean>
@@ -5332,8 +5338,9 @@ describe("PlaywrightSiteSessionService", () => {
       },
       detectCloudflareChallenge: async () =>
         currentUrl.includes("/auth/github/callback"),
-      solveCloudflareWithFlareSolverr: async () => {
+      solveCloudflareWithFlareSolverr: async (_context, _page, _options, targetUrl) => {
         solverCalls += 1
+        solverTargetUrl = targetUrl ?? ""
         return true
       },
       isGitHubOtpPage: async () => false,
@@ -5372,6 +5379,7 @@ describe("PlaywrightSiteSessionService", () => {
 
     expect(result.status).toBe("ready")
     expect(solverCalls).toBe(1)
+    expect(solverTargetUrl).toBe("https://linux.do")
     expect(waitedTransitions).toEqual([
       {
         fromUrl: "https://linux.do/auth/github/callback?code=demo",
@@ -5384,7 +5392,7 @@ describe("PlaywrightSiteSessionService", () => {
     ])
     expect(progress).toContain("Cloudflare 自动破解成功，延长登录流程等待窗口 120 秒")
     expect(progress).toContain(
-      "Linux.do GitHub callback Cloudflare 已放行，继续等待页面回跳（最多 20 秒）",
+      "Linux.do GitHub callback 已完成 Cloudflare 自动解题尝试，继续等待页面回跳（最多 20 秒）",
     )
     expect(progress).not.toContain(
       "Linux.do GitHub callback 持续停留在质询页，停止自动重试，避免回调页循环",
@@ -5395,6 +5403,7 @@ describe("PlaywrightSiteSessionService", () => {
     const progress: string[] = []
     const currentUrl = "https://linux.do/auth/github/callback?code=demo"
     let solverCalls = 0
+    let solverTargetUrl = ""
     let transitionCalls = 0
 
     const page = {
@@ -5439,7 +5448,12 @@ describe("PlaywrightSiteSessionService", () => {
     const runtime = service as unknown as {
       findTargetPage: () => Promise<Page | null>
       detectCloudflareChallenge: () => Promise<boolean>
-      solveCloudflareWithFlareSolverr: () => Promise<boolean>
+      solveCloudflareWithFlareSolverr: (
+        context: typeof context,
+        page: typeof page,
+        options: { onProgress?: (message: string) => void | Promise<void> },
+        solverTargetUrl?: string,
+      ) => Promise<boolean>
       isGitHubOtpPage: () => Promise<boolean>
       isGitHubLoginPage: () => Promise<boolean>
       isGitHubTwoFactorChoicePage: () => Promise<boolean>
@@ -5463,8 +5477,9 @@ describe("PlaywrightSiteSessionService", () => {
     Object.assign(runtime, {
       findTargetPage: async () => null,
       detectCloudflareChallenge: async () => true,
-      solveCloudflareWithFlareSolverr: async () => {
+      solveCloudflareWithFlareSolverr: async (_context, _page, _options, targetUrl) => {
         solverCalls += 1
+        solverTargetUrl = targetUrl ?? ""
         return true
       },
       isGitHubOtpPage: async () => false,
@@ -5500,9 +5515,10 @@ describe("PlaywrightSiteSessionService", () => {
     expect(result.status).toBe("manual_action_required")
     expect(result.message).toBe("Linux.do GitHub callback 持续停留在质询页，已停止自动重试")
     expect(solverCalls).toBe(1)
+    expect(solverTargetUrl).toBe("https://linux.do")
     expect(transitionCalls).toBe(2)
     expect(progress).toContain(
-      "Linux.do GitHub callback Cloudflare 已放行，继续等待页面回跳（最多 20 秒）",
+      "Linux.do GitHub callback 已完成 Cloudflare 自动解题尝试，继续等待页面回跳（最多 20 秒）",
     )
     expect(progress).toContain(
       "Linux.do GitHub callback 在 Cloudflare 自动破解后仍未回跳，停止自动重试，避免回调页循环",
