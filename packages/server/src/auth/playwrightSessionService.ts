@@ -163,12 +163,29 @@ interface LocalBrowserPrewarmApplyResult {
   userAgent: string | null
 }
 
+type InitialLocalBrowserPrewarmResult =
+  | {
+      kind: "applied"
+      result: FlareSolverrResult
+    }
+  | {
+      kind: "no_cookies"
+      userAgent: string | null
+      message: string
+    }
+
 export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   constructor(
     private readonly repository: StorageRepository,
     private readonly config: PlaywrightSiteSessionConfig,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
+
+  private isInitialLocalBrowserPrewarmAppliedResult(
+    value: InitialLocalBrowserPrewarmResult | FlareSolverrResult,
+  ): value is Extract<InitialLocalBrowserPrewarmResult, { kind: "applied" }> {
+    return "kind" in value && value.kind === "applied"
+  }
 
   async refreshSiteSession(
     account: SiteAccount,
@@ -202,10 +219,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       return this.buildLocalFlareSolverrUnavailableSessionResult()
     }
 
-    let initialPrewarmResult: FlareSolverrResult | null = null
+    let initialPrewarmResult: InitialLocalBrowserPrewarmResult | null = null
     if (this.shouldUseLocalFlareSolverr(profile)) {
       await this.reportProgress(options, "命中本地 FlareSolverr 预热策略")
-      initialPrewarmResult = await this.requestLocalBrowserChallengePrewarm(
+      initialPrewarmResult = await this.requestInitialLocalBrowserChallengePrewarm(
         account,
         profile,
         options,
@@ -226,15 +243,19 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       await this.reportProgress(options, "启动 Chromium 持久化上下文")
       context = await chromium.launchPersistentContext(
         this.config.sharedSsoProfileDirectory,
-        this.buildPersistentContextLaunchOptions(initialPrewarmResult?.userAgent),
+        this.buildPersistentContextLaunchOptions(
+          initialPrewarmResult?.kind === "applied"
+            ? initialPrewarmResult.result.userAgent
+            : initialPrewarmResult?.userAgent ?? undefined,
+        ),
       )
       page = context.pages()[0] ?? (await context.newPage())
 
-      if (initialPrewarmResult) {
+      if (initialPrewarmResult?.kind === "applied") {
         const prewarmResult = await this.applyLocalBrowserChallengePrewarm(
           context,
           page,
-          initialPrewarmResult,
+          initialPrewarmResult.result,
           options,
         )
         if (!prewarmResult) {
@@ -249,6 +270,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             diagnosticPath,
           }
         }
+      } else if (initialPrewarmResult?.kind === "no_cookies") {
+        await this.reportProgress(
+          options,
+          "本地 FlareSolverr 未返回 challenge cookie，继续进入浏览器流程观察实际挑战",
+        )
       }
       await this.reportProgress(options, "浏览器上下文已启动")
 
@@ -410,10 +436,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       return this.buildLocalFlareSolverrUnavailableCheckinResult(account)
     }
 
-    let initialPrewarmResult: FlareSolverrResult | null = null
+    let initialPrewarmResult: InitialLocalBrowserPrewarmResult | null = null
     if (this.shouldUseLocalFlareSolverr(profile)) {
       await this.reportProgress(options, "命中本地 FlareSolverr 预热策略")
-      initialPrewarmResult = await this.requestLocalBrowserChallengePrewarm(
+      initialPrewarmResult = await this.requestInitialLocalBrowserChallengePrewarm(
         account,
         profile,
         options,
@@ -446,15 +472,19 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     try {
       context = await chromium.launchPersistentContext(
         this.config.sharedSsoProfileDirectory,
-        this.buildPersistentContextLaunchOptions(initialPrewarmResult?.userAgent),
+        this.buildPersistentContextLaunchOptions(
+          initialPrewarmResult?.kind === "applied"
+            ? initialPrewarmResult.result.userAgent
+            : initialPrewarmResult?.userAgent ?? undefined,
+        ),
       )
       page = context.pages()[0] ?? (await context.newPage())
 
-      if (initialPrewarmResult) {
+      if (initialPrewarmResult?.kind === "applied") {
         const prewarmResult = await this.applyLocalBrowserChallengePrewarm(
           context,
           page,
-          initialPrewarmResult,
+          initialPrewarmResult.result,
           options,
         )
         if (!prewarmResult) {
@@ -472,6 +502,11 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             checkInUrl: joinUrl(account.site_url, resolveCheckInPath(account.site_type)),
           }
         }
+      } else if (initialPrewarmResult?.kind === "no_cookies") {
+        await this.reportProgress(
+          options,
+          "本地 FlareSolverr 未返回 challenge cookie，继续进入浏览器流程观察实际挑战",
+        )
       }
 
       if (this.isRunAnytimeSite(account)) {
@@ -3137,6 +3172,58 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return this.config.localFlareSolverr.url
   }
 
+  private async requestInitialLocalBrowserChallengePrewarm(
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
+  ): Promise<InitialLocalBrowserPrewarmResult | null> {
+    const localFlareSolverrUrl = this.resolveLocalFlareSolverrUrl()
+    if (!localFlareSolverrUrl) {
+      return null
+    }
+
+    const targetUrl = this.buildLocalFlareSolverrTargetUrl(account, profile)
+
+    await this.reportProgress(options, `开始本地 FlareSolverr 预热：${targetUrl}`)
+
+    try {
+      const result = await solveCloudflareChallenge(
+        localFlareSolverrUrl,
+        targetUrl,
+        this.fetchImpl,
+        (msg) => this.reportProgress(options, `[本地 FlareSolverr] ${msg}`),
+        this.config.localFlareSolverr
+          ? {
+              maxTimeoutMs: this.config.localFlareSolverr.timeoutMs,
+              requestTimeoutMs: this.config.localFlareSolverr.timeoutMs,
+              allowEmptyCookies: true,
+            }
+          : undefined,
+      )
+
+      if (!result) {
+        await this.reportProgress(options, "本地 FlareSolverr 预热失败")
+        return null
+      }
+
+      if (result.cookies.length === 0) {
+        return {
+          kind: "no_cookies",
+          userAgent: result.userAgent || null,
+          message: result.message ?? "",
+        }
+      }
+
+      return {
+        kind: "applied",
+        result,
+      }
+    } catch {
+      await this.reportProgress(options, "本地 FlareSolverr 预热异常")
+      return null
+    }
+  }
+
   private async requestLocalBrowserChallengePrewarm(
     account: SiteAccount,
     profile: SiteLoginProfile,
@@ -3242,6 +3329,23 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
       targetUrlOverride,
     )
     if (!result) {
+      return null
+    }
+
+    if (this.isInitialLocalBrowserPrewarmAppliedResult(result)) {
+      const page = context.pages()[0] ?? (await context.newPage())
+      return await this.applyLocalBrowserChallengePrewarm(
+        context,
+        page,
+        result.result,
+        options,
+      )
+    }
+
+    if ("kind" in result) {
+      if (result.kind !== "applied") {
+        return null
+      }
       return null
     }
 

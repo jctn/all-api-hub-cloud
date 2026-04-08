@@ -2185,7 +2185,11 @@ describe("PlaywrightSiteSessionService", () => {
 
       ;(
         service as unknown as {
-          requestLocalBrowserChallengePrewarm: () => Promise<FlareSolverrResult>
+          requestInitialLocalBrowserChallengePrewarm: () => Promise<{
+            kind: "no_cookies"
+            userAgent: string | null
+            message: string
+          }>
           seedBrowserContextWithAccountCookies: () => Promise<number>
           captureAuthenticatedAccount: () => Promise<SiteAccount | null>
           completeLoginFlow: (
@@ -2205,11 +2209,12 @@ describe("PlaywrightSiteSessionService", () => {
             message: string
           }>
         }
-      ).requestLocalBrowserChallengePrewarm = async () => {
+      ).requestInitialLocalBrowserChallengePrewarm = async () => {
         timeline.push("prewarm")
         return {
-          cookies: [],
+          kind: "no_cookies",
           userAgent: "ua",
+          message: "Challenge not detected!",
         }
       }
       ;(
@@ -2438,15 +2443,20 @@ describe("PlaywrightSiteSessionService", () => {
 
       ;(
         service as unknown as {
-          requestLocalBrowserChallengePrewarm: () => Promise<FlareSolverrResult>
+          requestInitialLocalBrowserChallengePrewarm: () => Promise<{
+            kind: "no_cookies"
+            userAgent: string | null
+            message: string
+          }>
           seedBrowserContextWithAccountCookies: () => Promise<number>
           captureAuthenticatedAccount: () => Promise<SiteAccount | null>
           completeLoginFlow: typeof completeLoginFlow
           performBrowserSessionCheckin: typeof performBrowserSessionCheckin
         }
-      ).requestLocalBrowserChallengePrewarm = async () => ({
-        cookies: [],
+      ).requestInitialLocalBrowserChallengePrewarm = async () => ({
+        kind: "no_cookies",
         userAgent: "ua",
+        message: "Challenge not detected!",
       })
       ;(
         service as unknown as {
@@ -3692,11 +3702,28 @@ describe("PlaywrightSiteSessionService", () => {
 
       ;(
         service as unknown as {
-          requestLocalBrowserChallengePrewarm: () => Promise<FlareSolverrResult>
+          requestInitialLocalBrowserChallengePrewarm: () => Promise<{
+            kind: "applied"
+            result: FlareSolverrResult
+          }>
         }
-      ).requestLocalBrowserChallengePrewarm = async () => ({
-        cookies: [],
-        userAgent: "ua-local",
+      ).requestInitialLocalBrowserChallengePrewarm = async () => ({
+        kind: "applied",
+        result: {
+          cookies: [
+            {
+              name: "cf_clearance",
+              value: "init-cookie",
+              domain: "demo.example.com",
+              path: "/",
+              expires: -1,
+              httpOnly: true,
+              secure: true,
+              sameSite: "Lax",
+            },
+          ],
+          userAgent: "ua-local",
+        },
       })
       ;(
         service as unknown as {
@@ -3850,6 +3877,146 @@ describe("PlaywrightSiteSessionService", () => {
 
       expect(result?.status).toBe(CheckinResultStatus.Failed)
       expect(result?.code).toBe("local_flaresolverr_prewarm_failed")
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
+  it("continues into the browser flow when the initial local prewarm reports no challenge cookies", async () => {
+    let completeLoginFlowCalled = false
+
+    const page = {
+      url() {
+        return "https://api.ouu.ch/login"
+      },
+      async goto() {
+        return undefined
+      },
+      async screenshot() {
+        return undefined
+      },
+      async setExtraHTTPHeaders() {
+        return undefined
+      },
+    }
+
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+      async addCookies() {
+        return undefined
+      },
+    }
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          localFlareSolverr: {
+            enabled: true,
+            url: "http://127.0.0.1:8191",
+            timeoutMs: 90_000,
+          },
+          siteLoginProfiles: {
+            "api.ouu.ch": {
+              hostname: "api.ouu.ch",
+              loginPath: "/login",
+              loginButtonSelectors: ["button.login"],
+              successUrlPatterns: ["/console"],
+              tokenStorageKeys: ["access_token"],
+              postLoginSelectors: [],
+              executionMode: "local-browser",
+              localBrowser: {
+                cloudflareMode: "prewarm",
+                flareSolverrScope: "root",
+                flareSolverrTargetPath: "/",
+                allowRetryAfterBrowserChallenge: true,
+                openRootBeforeCheckin: true,
+                manualFallbackPolicy: "disabled",
+                manualFallbackPolicyExplicit: true,
+              },
+            },
+          },
+        } as ServerConfig & {
+          localFlareSolverr: {
+            enabled: boolean
+            url: string | null
+            timeoutMs: number
+          }
+        },
+        async () =>
+          new Response(
+            JSON.stringify({
+              status: "ok",
+              message: "Challenge not detected!",
+              solution: {
+                url: "https://api.ouu.ch/",
+                status: 200,
+                cookies: [],
+                userAgent: "ua-local-prewarm",
+              },
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+              },
+            },
+          ),
+      )
+
+      ;(
+        service as unknown as {
+          completeLoginFlow: () => Promise<{ status: "ready"; page: typeof page }>
+          performBrowserSessionCheckin: () => Promise<CheckinAccountResult>
+        }
+      ).completeLoginFlow = async () => {
+        completeLoginFlowCalled = true
+        return { status: "ready", page }
+      }
+      ;(
+        service as unknown as {
+          performBrowserSessionCheckin: () => Promise<CheckinAccountResult>
+        }
+      ).performBrowserSessionCheckin = async () =>
+        ({
+          accountId: "acc-ouu",
+          siteName: "OuuAPI",
+          siteUrl: "https://api.ouu.ch",
+          siteType: "new-api",
+          status: CheckinResultStatus.Success,
+          code: "ok",
+          message: "ok",
+          startedAt: Date.now(),
+          completedAt: Date.now(),
+          checkInUrl: "https://api.ouu.ch/console/personal",
+        }) as CheckinAccountResult
+
+      const result = await service.checkInWithBrowserSession(
+        {
+          ...baseAccount,
+          id: "acc-ouu",
+          site_name: "OuuAPI",
+          site_url: "https://api.ouu.ch",
+        },
+        {},
+      )
+
+      expect(result?.status).toBe(CheckinResultStatus.Success)
+      expect(completeLoginFlowCalled).toBe(true)
     } finally {
       launchSpy.mockRestore()
     }

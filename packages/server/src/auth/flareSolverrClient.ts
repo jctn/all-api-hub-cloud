@@ -23,11 +23,13 @@ interface FlareSolverrResponse {
 export interface FlareSolverrResult {
   cookies: FlareSolverrCookie[]
   userAgent: string
+  message?: string
 }
 
 export interface SolveCloudflareChallengeOptions {
   maxTimeoutMs?: number
   requestTimeoutMs?: number
+  allowEmptyCookies?: boolean
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000
@@ -45,6 +47,7 @@ export async function solveCloudflareChallenge(
   const maxTimeoutMs = options?.maxTimeoutMs ?? DEFAULT_MAX_TIMEOUT_MS
   const requestTimeoutMs =
     options?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+  const allowEmptyCookies = options?.allowEmptyCookies ?? false
 
   log(`POST ${endpoint} url=${targetUrl}`)
   try {
@@ -75,14 +78,23 @@ export async function solveCloudflareChallenge(
       return null
     }
 
-    const cookies = data.solution?.cookies
-    if (!cookies?.length) {
+    const cookies = data.solution?.cookies ?? []
+    if (!cookies.length && !allowEmptyCookies) {
       log("求解成功但未返回 cookie")
       return null
     }
 
-    log(`获取 ${cookies.length} 个 cookie`)
-    return { cookies, userAgent: data.solution?.userAgent ?? "" }
+    if (!cookies.length) {
+      log("求解成功但未返回 cookie")
+    } else {
+      log(`获取 ${cookies.length} 个 cookie`)
+    }
+
+    return {
+      cookies,
+      userAgent: data.solution?.userAgent ?? "",
+      message: data.message,
+    }
   } catch (err) {
     log(`请求失败: ${err instanceof Error ? err.message : String(err)}`)
     return null
