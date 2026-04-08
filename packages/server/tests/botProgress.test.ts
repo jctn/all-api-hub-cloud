@@ -13,11 +13,8 @@ describe("batch checkin progress reporter", () => {
       ),
     ).toBe(true)
     expect(
-      shouldBroadcastBatchCheckinProgress("本地浏览器任务已入队：task-123"),
-    ).toBe(true)
-    expect(
       shouldBroadcastBatchCheckinProgress(
-        "[本地浏览器] [随时跑路公益站] 命中本地 FlareSolverr 预热策略",
+        "[随时跑路公益站] 命中本地 FlareSolverr 预热策略",
       ),
     ).toBe(true)
     expect(

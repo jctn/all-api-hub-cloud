@@ -5,7 +5,6 @@ import { loadServerConfig, resolveServerConfig } from "../src/config.js"
 const baseEnv = {
   DATABASE_URL: "postgres://user:pass@localhost:5432/all_api_hub",
   INTERNAL_ADMIN_TOKEN: "internal-token",
-  LOCAL_WORKER_TOKEN: "local-worker-token",
   TG_BOT_TOKEN: "123456:ABCDEF",
   TG_WEBHOOK_SECRET: "tg-secret",
   TG_ADMIN_CHAT_ID: "10001",

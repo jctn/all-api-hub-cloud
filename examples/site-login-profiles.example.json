@@ -1,6 +1,5 @@
 {
   "demo.example.com": {
-    "executionMode": "local-browser",
     "loginPath": "/auth/login",
     "loginButtonSelectors": [
       "button[data-provider='linuxdo']",
@@ -22,7 +21,6 @@
     ]
   },
   "*.example.net": {
-    "executionMode": "cloud",
     "loginPath": "/login",
     "loginButtonSelectors": [
       "a[href*='linux.do']",

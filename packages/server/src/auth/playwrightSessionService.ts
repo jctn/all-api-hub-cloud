@@ -71,8 +71,38 @@ const GITHUB_AUTHORIZE_SELECTORS = [
   "input[type='submit'][value*='Authorize']",
   "input[type='submit'][value*='Allow']",
 ]
+const COMMON_LOGIN_ENTRY_SELECTORS = [
+  "a[href*='/login']",
+  "button:has-text('登录')",
+  "a:has-text('登录')",
+  "button:has-text('Sign in')",
+  "a:has-text('Sign in')",
+  "button:has-text('Login')",
+  "a:has-text('Login')",
+]
+const DIRECT_LINUXDO_LOGIN_SELECTORS = [
+  "button:has-text('使用 LinuxDO 继续')",
+  "button:has-text('Continue with LinuxDO')",
+  "text=使用 LinuxDO 继续",
+  "text=Continue with LinuxDO",
+]
+const COMMON_PUBLIC_ENTRY_SELECTORS = [
+  "a[href*='/login']",
+  "button:has-text('登录')",
+  "a:has-text('登录')",
+  "button:has-text('注册')",
+  "a:has-text('注册')",
+  "button:has-text('Sign in')",
+  "a:has-text('Sign in')",
+  "button:has-text('Login')",
+  "a:has-text('Login')",
+  "button:has-text('Register')",
+  "a:has-text('Register')",
+  "a[href*='/register']",
+]
 const AUTH_SELF_VALIDATION_ATTEMPTS = 5
 const AUTH_SELF_VALIDATION_RETRY_DELAY_MS = 1_000
+const LOCAL_BROWSER_CF_AUTO_CLEAR_WAIT_MS = 20_000
 const RUN_ANYTIME_LINUXDO_CALLBACK_WAIT_MS = 60_000
 const LINUXDO_SSO_DEADLINE_EXTENSION_MS = 120_000
 const LINUXDO_CALLBACK_WAIT_MS = 20_000
@@ -238,15 +268,15 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
     let context: BrowserContext | null = null
     let page: Page | null = null
+    const shouldOpenSiteRootFirst = this.shouldOpenSiteRootBeforeCheckin(profile)
+    let injectedCookieCount = 0
 
     try {
       await this.reportProgress(options, "启动 Chromium 持久化上下文")
       context = await chromium.launchPersistentContext(
         this.config.sharedSsoProfileDirectory,
         this.buildPersistentContextLaunchOptions(
-          initialPrewarmResult?.kind === "applied"
-            ? initialPrewarmResult.result.userAgent
-            : initialPrewarmResult?.userAgent ?? undefined,
+          this.resolveInitialPrewarmLaunchUserAgent(initialPrewarmResult),
         ),
       )
       page = context.pages()[0] ?? (await context.newPage())
@@ -277,16 +307,60 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           "本地 FlareSolverr 未返回 challenge cookie，继续进入浏览器流程观察实际挑战",
         )
       }
+      injectedCookieCount = await this.seedBrowserContextWithAccountCookies(
+        context,
+        account,
+        options,
+      )
+      if (injectedCookieCount > 0) {
+        await this.reportProgress(
+          options,
+          `刷新前先复用账号已有站点会话 cookie（${injectedCookieCount} 个）`,
+        )
+      }
       await this.reportProgress(options, "浏览器上下文已启动")
 
-      await this.reportProgress(
-        options,
-        `打开站点登录页：${joinUrl(account.site_url, profile.loginPath)}`,
-      )
-      await page.goto(joinUrl(account.site_url, profile.loginPath), {
-        waitUntil: "domcontentloaded",
-        timeout: 90_000,
-      })
+      if (shouldOpenSiteRootFirst && !this.isRunAnytimeSite(account)) {
+        const targetRootUrl = joinUrl(account.site_url, "/")
+        await this.reportProgress(
+          options,
+          `站点根页优先：预热后先打开站点根页：${targetRootUrl}`,
+        )
+        await page.goto(targetRootUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 90_000,
+        })
+        const reusedAccount = await this.tryReuseAuthenticatedSessionFromCurrentPage(
+          context,
+          page,
+          account,
+          profile,
+          options,
+          {
+            success: "站点根页会话校验成功，直接复用本地浏览器会话",
+            failure:
+              injectedCookieCount > 0
+                ? "站点根页会话未通过 /api/user/self 校验，继续尝试完整 SSO"
+                : "站点根页未检测到可复用会话，继续尝试完整 SSO",
+          },
+        )
+        if (reusedAccount) {
+          return {
+            status: "refreshed",
+            message: "站点会话已刷新",
+            account: reusedAccount,
+          }
+        }
+      } else {
+        await this.reportProgress(
+          options,
+          `打开站点登录页：${joinUrl(account.site_url, profile.loginPath)}`,
+        )
+        await page.goto(joinUrl(account.site_url, profile.loginPath), {
+          waitUntil: "domcontentloaded",
+          timeout: 90_000,
+        })
+      }
 
       const flowResult = await this.completeLoginFlow(
         context,
@@ -465,18 +539,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     let context: BrowserContext | null = null
     let page: Page | null = null
     let shouldCloseContext = true
-    const shouldOpenRunAnytimeRootFirst = this.shouldOpenRunAnytimeRootBeforeCheckin(
-      account,
-      profile,
-    )
+    const shouldOpenSiteRootFirst = this.shouldOpenSiteRootBeforeCheckin(profile)
+    let nonRunAnytimeInjectedCookieCount = 0
 
     try {
       context = await chromium.launchPersistentContext(
         this.config.sharedSsoProfileDirectory,
         this.buildPersistentContextLaunchOptions(
-          initialPrewarmResult?.kind === "applied"
-            ? initialPrewarmResult.result.userAgent
-            : initialPrewarmResult?.userAgent ?? undefined,
+          this.resolveInitialPrewarmLaunchUserAgent(initialPrewarmResult),
         ),
       )
       page = context.pages()[0] ?? (await context.newPage())
@@ -528,7 +598,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           return await this.pauseRunAnytimeAtRootForDebug(page, account, options)
         }
 
-        if (shouldOpenRunAnytimeRootFirst) {
+        if (shouldOpenSiteRootFirst) {
           const runAnytimeRootUrl = joinUrl(account.site_url, "/")
           await this.reportProgress(
             options,
@@ -603,12 +673,60 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             "RunAnytime 站点会话直连未通过 /api/user/self 校验，继续尝试完整 SSO",
           )
         }
+      } else {
+        nonRunAnytimeInjectedCookieCount = await this.seedBrowserContextWithAccountCookies(
+          context,
+          account,
+          options,
+        )
+        if (nonRunAnytimeInjectedCookieCount > 0) {
+          await this.reportProgress(
+            options,
+            `站点根页优先前先复用账号已有站点会话 cookie（${nonRunAnytimeInjectedCookieCount} 个）`,
+          )
+        }
       }
 
-      if (shouldOpenRunAnytimeRootFirst) {
+      if (shouldOpenSiteRootFirst && !this.isRunAnytimeSite(account)) {
+        const targetRootUrl = joinUrl(account.site_url, "/")
         await this.reportProgress(
           options,
-          `RunAnytime 根页优先：沿用当前页面进入完整 SSO 自动登录：${page.url()}`,
+          `站点根页优先：预热后先打开站点根页：${targetRootUrl}`,
+        )
+        await page.goto(targetRootUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 90_000,
+        })
+        const reusedAccount = await this.tryReuseAuthenticatedSessionFromCurrentPage(
+          context,
+          page,
+          account,
+          profile,
+          options,
+          {
+            success: "站点根页会话校验成功，切换为页面按钮签到流",
+            failure:
+              nonRunAnytimeInjectedCookieCount > 0
+                ? "站点根页会话未通过 /api/user/self 校验，继续尝试完整 SSO"
+                : "站点根页未检测到可复用会话，继续尝试完整 SSO",
+          },
+        )
+        if (reusedAccount) {
+          return await this.performBrowserSessionCheckin(
+            page,
+            reusedAccount,
+            profile,
+            options,
+          )
+        }
+      }
+
+      if (shouldOpenSiteRootFirst) {
+        await this.reportProgress(
+          options,
+          this.isRunAnytimeSite(account)
+            ? `RunAnytime 根页优先：沿用当前页面进入完整 SSO 自动登录：${page.url()}`
+            : `站点根页优先：沿用当前页面进入完整 SSO 自动登录：${page.url()}`,
         )
       } else {
         await page.goto(joinUrl(account.site_url, profile.loginPath), {
@@ -796,6 +914,44 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return cookies.length
   }
 
+  private async tryReuseAuthenticatedSessionFromCurrentPage(
+    context: BrowserContext,
+    page: Page,
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
+    messages: {
+      success: string
+      failure: string
+    },
+  ): Promise<SiteAccount | null> {
+    const currentUrl = page.url()
+    const currentPath = this.getUrlPathname(currentUrl)
+    if (
+      this.getUrlHostname(currentUrl) !== new URL(account.site_url).hostname ||
+      currentPath.includes("/login") ||
+      currentPath.includes("/auth")
+    ) {
+      return null
+    }
+
+    const capturedAccount = await this.captureAuthenticatedAccount(
+      page,
+      context,
+      account,
+      profile,
+      options,
+    )
+    if (capturedAccount) {
+      await this.repository.saveAccount(capturedAccount)
+      await this.reportProgress(options, messages.success)
+      return capturedAccount
+    }
+
+    await this.reportProgress(options, messages.failure)
+    return null
+  }
+
   private async completeLoginFlow(
     context: BrowserContext,
     page: Page,
@@ -931,6 +1087,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           }
 
           browserChallengePrewarmUsed = true
+          const browserChallengeRetryUrl = currentUrl
+            ? this.stripCfChallengeParams(currentUrl)
+            : undefined
           await this.reportProgress(
             options,
             "浏览器过程中再次命中 Cloudflare，尝试一次额外预热",
@@ -940,7 +1099,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             account,
             profile,
             options,
-            currentUrl || undefined,
+            browserChallengeRetryUrl,
           )
           if (!prewarmResult) {
             await this.reportProgress(options, "本地 FlareSolverr 预热失败")
@@ -953,7 +1112,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
           await this.reportProgress(
             options,
-            "额外预热完成，刷新当前页面后继续自动流程",
+            browserChallengeRetryUrl && browserChallengeRetryUrl !== currentUrl
+              ? "额外预热完成，重新打开去掉 Cloudflare 挑战参数的原始页面后继续自动流程"
+              : "额外预热完成，刷新当前页面后继续自动流程",
           )
           const reloadPage = flowPage as Page & {
             reload?: (options?: {
@@ -961,18 +1122,42 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
               timeout?: number
             }) => Promise<unknown>
           }
-          if (typeof reloadPage.reload === "function") {
+          if (
+            browserChallengeRetryUrl &&
+            currentUrl &&
+            browserChallengeRetryUrl !== currentUrl
+          ) {
+            await flowPage.goto(browserChallengeRetryUrl, {
+              waitUntil: "domcontentloaded",
+              timeout: 60_000,
+            })
+          } else if (typeof reloadPage.reload === "function") {
             await reloadPage.reload({
               waitUntil: "domcontentloaded",
               timeout: 60_000,
             })
-          } else if (currentUrl) {
-            await flowPage.goto(currentUrl, {
+          } else if (browserChallengeRetryUrl) {
+            await flowPage.goto(browserChallengeRetryUrl, {
               waitUntil: "domcontentloaded",
               timeout: 60_000,
             })
           }
-          await flowPage.waitForTimeout(1_000)
+          await this.reportProgress(options, "等待 Cloudflare 自动验证结果")
+          if (
+            !(await this.waitForCloudflareChallengeToClear(flowPage, {
+              timeoutMs: LOCAL_BROWSER_CF_AUTO_CLEAR_WAIT_MS,
+            }))
+          ) {
+            const exhaustedMsg =
+              "浏览器过程中再次命中 Cloudflare，额外预热次数已耗尽，停止自动重试"
+            await this.reportProgress(options, exhaustedMsg)
+            return {
+              status: "failed",
+              code: "cloudflare_prewarm_exhausted",
+              message: exhaustedMsg,
+            }
+          }
+          await this.reportProgress(options, "Cloudflare 页面已自动放行，继续登录流程")
           continue
         }
 
@@ -1148,13 +1333,32 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
           }
         }
         if (
+          await this.tryStartDirectLinuxDoOauthFlow(
+            context,
+            flowPage,
+            account,
+            profile,
+            options,
+          )
+        ) {
+          continue
+        }
+        const targetSiteLoginActionKey = `${currentUrl || targetHost}::target-site-login-entry`
+        if (
+          this.canAttemptFlowAction(actionCooldowns, targetSiteLoginActionKey) &&
           await this.clickFirstVisibleWithPopup(
             context,
             flowPage,
-            profile.loginButtonSelectors,
+            this.buildSiteLoginEntrySelectors(profile),
           )
         ) {
+          this.markFlowActionAttempt(
+            actionCooldowns,
+            targetSiteLoginActionKey,
+            8_000,
+          )
           await this.reportProgress(options, "已点击站点登录入口，等待 SSO 跳转")
+          await this.waitForFlowTransition(flowPage, currentUrl, 8_000)
           continue
         }
 
@@ -2945,6 +3149,129 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
   }
 
+  private extractJsonRecordFromFlareSolverrResponse(
+    rawText: string,
+  ): Record<string, unknown> | null {
+    const directRecord = this.tryParseJsonRecord(rawText)
+    if (directRecord) {
+      return directRecord
+    }
+
+    const preMatch = rawText.match(/<pre[^>]*>([\s\S]*?)<\/pre>/iu)
+    if (!preMatch) {
+      return null
+    }
+
+    const normalized = preMatch[1]
+      .replaceAll("&quot;", "\"")
+      .replaceAll("&#39;", "'")
+      .replaceAll("&amp;", "&")
+      .trim()
+    return this.tryParseJsonRecord(normalized)
+  }
+
+  private extractOauthStateFromFlareSolverrResponse(rawText: string): string {
+    const record = this.extractJsonRecordFromFlareSolverrResponse(rawText)
+    return typeof record?.data === "string" ? record.data : ""
+  }
+
+  private async readLinuxDoClientIdFromStatus(page: Page): Promise<string> {
+    const pageWithEvaluate = page as Page & {
+      evaluate?: <TResult>(pageFunction: () => TResult | Promise<TResult>) => Promise<TResult>
+    }
+    if (typeof pageWithEvaluate.evaluate !== "function") {
+      return ""
+    }
+
+    return await page
+      .evaluate(() => {
+        try {
+          const rawStatus = window.localStorage.getItem("status")
+          const parsed = rawStatus ? JSON.parse(rawStatus) : null
+          const clientId = parsed?.linuxdo_client_id ?? parsed?.linux_do_client_id
+          return typeof clientId === "string" ? clientId : ""
+        } catch {
+          return ""
+        }
+      })
+      .catch(() => "")
+  }
+
+  private async tryStartDirectLinuxDoOauthFlow(
+    context: BrowserContext,
+    page: Page,
+    account: SiteAccount,
+    profile: SiteLoginProfile,
+    options: SessionRefreshOptions,
+  ): Promise<boolean> {
+    if (!this.shouldUseLocalFlareSolverr(profile)) {
+      return false
+    }
+
+    if (!this.getUrlPathname(page.url()).includes("/login")) {
+      return false
+    }
+
+    if (!(await this.hasVisibleAnySelector(page, DIRECT_LINUXDO_LOGIN_SELECTORS))) {
+      return false
+    }
+
+    const linuxDoClientId = await this.readLinuxDoClientIdFromStatus(page)
+    if (!linuxDoClientId) {
+      return false
+    }
+
+    await this.reportProgress(
+      options,
+      "检测到 New API LinuxDO 登录页，尝试直取 oauth state 并直连 Linux.do 授权页",
+    )
+    const oauthStateResult = await this.requestLocalBrowserChallengePrewarm(
+      account,
+      profile,
+      options,
+      joinUrl(account.site_url, "/api/oauth/state"),
+    )
+    if (!oauthStateResult) {
+      return false
+    }
+
+    const oauthState = this.extractOauthStateFromFlareSolverrResponse(
+      oauthStateResult.response ?? "",
+    )
+    if (!oauthState) {
+      await this.reportProgress(
+        options,
+        "本地 FlareSolverr 已请求 /api/oauth/state，但未提取到 oauth state",
+      )
+      return false
+    }
+
+    const applied = await this.applyLocalBrowserChallengePrewarm(
+      context,
+      page,
+      oauthStateResult,
+      options,
+    )
+    if (!applied) {
+      return false
+    }
+
+    const authUrl = new URL("https://connect.linux.do/oauth2/authorize")
+    authUrl.searchParams.set("response_type", "code")
+    authUrl.searchParams.set("client_id", linuxDoClientId)
+    authUrl.searchParams.set("state", oauthState)
+
+    await this.reportProgress(
+      options,
+      "已绕过站点失效的 LinuxDO 按钮，直接打开 Linux.do 授权页",
+    )
+    await page.goto(authUrl.toString(), {
+      waitUntil: "domcontentloaded",
+      timeout: 90_000,
+    })
+    return true
+  }
+
   private isAlreadyCheckedMessage(message: string): boolean {
     const normalized = message.toLowerCase()
     return ["已经签到", "已签到", "今天已经签到", "already"].some((snippet) =>
@@ -3050,14 +3377,59 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     )
   }
 
-  private resolveLocalBrowserProfile(
-    profile: SiteLoginProfile,
-  ): LocalBrowserProfile | null {
-    if (profile.executionMode !== "local-browser") {
-      return null
+  private async waitForCloudflareChallengeToClear(
+    page: Page,
+    settings?: {
+      timeoutMs?: number
+      intervalMs?: number
+    },
+  ): Promise<boolean> {
+    const timeoutMs = settings?.timeoutMs ?? LOCAL_BROWSER_CF_AUTO_CLEAR_WAIT_MS
+    const intervalMs = settings?.intervalMs ?? 1_000
+    const maxChecks = Math.max(1, Math.ceil(timeoutMs / intervalMs))
+    const pageWithWaitForLoadState = page as Page & {
+      waitForLoadState?: (
+        state?: "load" | "domcontentloaded" | "networkidle",
+        options?: { timeout?: number },
+      ) => Promise<unknown>
+    }
+    const pageWithWaitForTimeout = page as Page & {
+      waitForTimeout?: (timeoutMs: number) => Promise<unknown>
     }
 
-    return profile.localBrowser ?? null
+    for (let attempt = 0; attempt < maxChecks; attempt += 1) {
+      if (!(await this.detectCloudflareChallenge(page))) {
+        return true
+      }
+
+      if (attempt >= maxChecks - 1) {
+        break
+      }
+
+      if (typeof pageWithWaitForLoadState.waitForLoadState === "function") {
+        await pageWithWaitForLoadState
+          .waitForLoadState("domcontentloaded", { timeout: intervalMs })
+          .catch(() => undefined)
+      }
+
+      if (typeof pageWithWaitForTimeout.waitForTimeout === "function") {
+        await pageWithWaitForTimeout.waitForTimeout(intervalMs).catch(() => undefined)
+        continue
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs))
+    }
+
+    return !(await this.detectCloudflareChallenge(page))
+  }
+
+  private resolveLocalBrowserProfile(
+    _profile: SiteLoginProfile,
+  ): LocalBrowserProfile | null {
+    // The local-browser worker path has been removed. Keep parsing legacy
+    // profile fields for backward compatibility, but never let cloud runtime
+    // execute local-browser-only behavior again.
+    return null
   }
 
   private shouldAllowManualFallback(
@@ -3080,14 +3452,12 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return localProfile.manualFallbackPolicy !== "disabled"
   }
 
-  private shouldOpenRunAnytimeRootBeforeCheckin(
-    account: SiteAccount,
-    profile: SiteLoginProfile,
-  ): boolean {
-    return (
-      this.isRunAnytimeSite(account) &&
-      this.resolveLocalBrowserProfile(profile)?.openRootBeforeCheckin === true
-    )
+  private shouldOpenSiteRootBeforeCheckin(profile: SiteLoginProfile): boolean {
+    return this.resolveLocalBrowserProfile(profile)?.openRootBeforeCheckin === true
+  }
+
+  private buildSiteLoginEntrySelectors(profile: SiteLoginProfile): string[] {
+    return [...new Set([...profile.loginButtonSelectors, ...COMMON_LOGIN_ENTRY_SELECTORS])]
   }
 
   private shouldRetryBrowserChallengeWithLocalPrewarm(
@@ -3138,6 +3508,16 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     return Boolean(
       this.config.localFlareSolverr?.enabled && this.config.localFlareSolverr.url,
     )
+  }
+
+  private resolveInitialPrewarmLaunchUserAgent(
+    initialPrewarmResult: InitialLocalBrowserPrewarmResult | null,
+  ): string | undefined {
+    if (initialPrewarmResult?.kind !== "applied") {
+      return undefined
+    }
+
+    return initialPrewarmResult.result.userAgent || undefined
   }
 
   private buildLocalFlareSolverrTargetUrl(
@@ -3353,7 +3733,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
   private async applyLocalBrowserChallengePrewarm(
     context: BrowserContext,
-    page: Page,
+    _page: Page,
     result: FlareSolverrResult,
     options: SessionRefreshOptions,
   ): Promise<LocalBrowserPrewarmApplyResult | null> {
@@ -3377,13 +3757,9 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
 
       const userAgent = result.userAgent || null
       if (userAgent) {
-        await Promise.race([
-          page.setExtraHTTPHeaders({ "User-Agent": userAgent }),
-          new Promise((resolve) => setTimeout(resolve, 3_000)),
-        ]).catch(() => undefined)
         await this.reportProgress(
           options,
-          `本地 FlareSolverr 同步 UA: ${userAgent.slice(0, 40)}...`,
+          "本地 FlareSolverr 返回求解 UA，但本地浏览器保留系统 Chrome 原生 UA",
         )
       }
 
@@ -3634,7 +4010,15 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     const pathname = this.getUrlPathname(currentUrl)
-    return !pathname.includes("/login") && !pathname.includes("/auth")
+    if (pathname.includes("/login") || pathname.includes("/auth")) {
+      return false
+    }
+
+    if (await this.hasVisibleAnySelector(page, COMMON_PUBLIC_ENTRY_SELECTORS)) {
+      return false
+    }
+
+    return await this.probeBrowserAuthenticatedSession(page, profile)
   }
 
   private async inspectBrokenLoginEntry(
@@ -3651,7 +4035,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     const snapshot = await page
-      .evaluate(() => {
+      .evaluate(async () => {
         const root = document.getElementById("root")
         const bodyText = document.body?.innerText?.trim() || ""
         const mainAppScript =
@@ -3659,12 +4043,29 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
             .map((item) => item.getAttribute("src") || "")
             .find((src) => /\/assets\/index-[^/]+\.js(?:[?#].*)?$/iu.test(src)) || ""
 
+        const resolveMainAppScriptStatus = async (): Promise<number> => {
+          if (!mainAppScript) {
+            return 0
+          }
+
+          try {
+            const response = await fetch(mainAppScript, {
+              method: "HEAD",
+              cache: "no-store",
+            })
+            return response.status
+          } catch {
+            return 0
+          }
+        }
+
         return {
           readyState: document.readyState,
           rootChildren: root?.children.length ?? 0,
           rootHtmlLength: root?.innerHTML.length ?? 0,
           bodyTextLength: bodyText.length,
           mainAppScript,
+          mainAppScriptStatus: await resolveMainAppScriptStatus(),
         }
       })
       .catch(() => null)
@@ -3676,9 +4077,14 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     const looksLikeBrokenSpaShell =
       snapshot.readyState === "complete" &&
       Boolean(snapshot.mainAppScript) &&
-      snapshot.rootChildren === 0 &&
-      snapshot.rootHtmlLength === 0 &&
-      snapshot.bodyTextLength <= 80
+      (
+        (
+          snapshot.rootChildren === 0 &&
+          snapshot.rootHtmlLength === 0 &&
+          snapshot.bodyTextLength <= 80
+        ) ||
+        snapshot.mainAppScriptStatus >= 400
+      )
 
     if (!looksLikeBrokenSpaShell) {
       return null
@@ -4512,6 +4918,18 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
   }
 
   private async hasVisibleSelector(page: Page, selector: string): Promise<boolean> {
+    const pageWithLocator = page as Page & {
+      locator?: (selector: string) => {
+        first: () => {
+          count: () => Promise<number>
+          isVisible: () => Promise<boolean>
+        }
+      }
+    }
+    if (typeof pageWithLocator.locator !== "function") {
+      return false
+    }
+
     const locator = page.locator(selector).first()
     const count = await locator.count().catch(() => 0)
     if (count === 0) {
@@ -4519,6 +4937,140 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
 
     return await locator.isVisible().catch(() => false)
+  }
+
+  private async hasVisibleAnySelector(page: Page, selectors: string[]): Promise<boolean> {
+    for (const selector of selectors) {
+      if (await this.hasVisibleSelector(page, selector)) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  private async probeBrowserAuthenticatedSession(
+    page: Page,
+    profile: SiteLoginProfile,
+  ): Promise<boolean> {
+    const pageWithEvaluate = page as Page & {
+      evaluate?: <TArg, TResult>(
+        pageFunction: (arg: TArg) => Promise<TResult> | TResult,
+        arg: TArg,
+      ) => Promise<TResult>
+    }
+    if (typeof pageWithEvaluate.evaluate !== "function") {
+      return false
+    }
+
+    return await page
+      .evaluate(async ({ tokenStorageKeys }) => {
+        const tokenPattern = /access[_-]?token|token|jwt|auth/i
+        const normalizeToken = (value: string): string => {
+          const trimmed = value.trim()
+          if (!trimmed) {
+            return ""
+          }
+
+          try {
+            const parsed = JSON.parse(trimmed) as unknown
+            if (typeof parsed === "string") {
+              return parsed.trim()
+            }
+
+            if (parsed && typeof parsed === "object") {
+              const record = parsed as Record<string, unknown>
+              const directToken =
+                typeof record.access_token === "string"
+                  ? record.access_token.trim()
+                  : ""
+              if (directToken) {
+                return directToken
+              }
+
+              for (const [key, entryValue] of Object.entries(record)) {
+                if (
+                  tokenPattern.test(key) &&
+                  typeof entryValue === "string" &&
+                  entryValue.trim()
+                ) {
+                  return entryValue.trim()
+                }
+              }
+            }
+          } catch {
+            return trimmed
+          }
+
+          return ""
+        }
+
+        const storages = [window.localStorage, window.sessionStorage]
+        let accessToken = ""
+        for (const storage of storages) {
+          for (const key of tokenStorageKeys) {
+            const rawValue = storage.getItem(key)
+            if (!rawValue) {
+              continue
+            }
+            accessToken = normalizeToken(rawValue)
+            if (accessToken) {
+              break
+            }
+          }
+
+          if (accessToken) {
+            break
+          }
+        }
+
+        const headers = new Headers({
+          Accept: "application/json, text/plain, */*",
+        })
+        if (accessToken) {
+          headers.set(
+            "Authorization",
+            /^bearer\s+/iu.test(accessToken) ? accessToken : `Bearer ${accessToken}`,
+          )
+        }
+
+        try {
+          const response = await fetch("/api/user/self", {
+            method: "GET",
+            credentials: "include",
+            headers,
+          })
+          if (!response.ok) {
+            return false
+          }
+
+          const payload = (await response.json().catch(() => null)) as
+            | Record<string, unknown>
+            | null
+          if (!payload || typeof payload !== "object") {
+            return false
+          }
+
+          const payloadData =
+            payload.data && typeof payload.data === "object"
+              ? (payload.data as Record<string, unknown>)
+              : payload.payload && typeof payload.payload === "object"
+                ? (
+                    (payload.payload as Record<string, unknown>).data ??
+                    payload.payload
+                  )
+                : payload
+
+          return Boolean(
+            payloadData &&
+              typeof payloadData === "object" &&
+              Object.keys(payloadData as Record<string, unknown>).length > 0,
+          )
+        } catch {
+          return false
+        }
+      }, { tokenStorageKeys: profile.tokenStorageKeys })
+      .catch(() => false)
   }
 
   private getUrlHostname(url: string): string {

@@ -4,7 +4,7 @@ import type { UserFromGetMe } from "grammy/types"
 
 import type { ServerConfig } from "../config.js"
 import type { GitHubBackupImporter } from "../importing/githubRepoImporter.js"
-import type { CheckinExecutionController } from "../localWorker/hybridOrchestrator.js"
+import type { CheckinExecutionController } from "../checkin/orchestrator.js"
 import { BusyTaskError, type TaskCoordinator } from "../taskCoordinator.js"
 import {
   formatAccountsMessage,
@@ -58,8 +58,6 @@ export function shouldBroadcastBatchCheckinProgress(text: string): boolean {
 
   return (
     normalized.includes("签到进度 (") ||
-    normalized.includes("本地浏览器任务已入队") ||
-    normalized.includes("本地浏览器任务状态：") ||
     normalized.includes("命中本地 FlareSolverr 预热策略") ||
     normalized.includes("先打开站点根页") ||
     normalized.includes("当前 profile 已禁用人工兜底") ||
@@ -371,29 +369,15 @@ export async function createTelegramBot(params: {
 
   bot.command("status", async (ctx) => {
     const chatId = ctx.chat?.id
-    const [settings, history, activeLocalWorkerTask] = await Promise.all([
+    const [settings, history] = await Promise.all([
       params.repository.getSettings(),
       params.repository.getHistory(),
-      params.orchestrator.getActiveLocalWorkerTask?.() ?? Promise.resolve(null),
     ])
-
-    const displayedTask = activeLocalWorkerTask
-      ? {
-          active: true,
-          kind: `local-worker:${activeLocalWorkerTask.kind}`,
-          label: `本地浏览器任务 ${activeLocalWorkerTask.kind} (${activeLocalWorkerTask.status})`,
-          startedAt:
-            activeLocalWorkerTask.startedAt ??
-            activeLocalWorkerTask.claimedAt ??
-            activeLocalWorkerTask.requestedAt,
-          finishedAt: activeLocalWorkerTask.finishedAt,
-        }
-      : params.taskCoordinator.getState()
 
     await sendText(
       chatId,
       formatStatusMessage({
-        task: displayedTask,
+        task: params.taskCoordinator.getState(),
         latestRecord: history.records[0],
         settings,
         timeZone: params.config.timeZone,

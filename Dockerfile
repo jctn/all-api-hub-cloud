@@ -10,7 +10,6 @@ COPY package.json package-lock.json pnpm-workspace.yaml tsconfig.base.json vites
 COPY packages/browser/package.json packages/browser/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/server/package.json packages/server/package.json
-COPY packages/worker/package.json packages/worker/package.json
 
 RUN npm ci
 

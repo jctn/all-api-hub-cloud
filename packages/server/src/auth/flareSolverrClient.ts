@@ -9,14 +9,27 @@ export interface FlareSolverrCookie {
   sameSite: string
 }
 
+interface RawFlareSolverrCookie {
+  name?: string
+  value?: string
+  domain?: string
+  path?: string
+  expires?: number
+  expiry?: number
+  httpOnly?: boolean
+  secure?: boolean
+  sameSite?: string
+}
+
 interface FlareSolverrResponse {
   status?: string
   message?: string
   solution?: {
     url?: string
     status?: number
-    cookies?: FlareSolverrCookie[]
+    cookies?: RawFlareSolverrCookie[]
     userAgent?: string
+    response?: string
   }
 }
 
@@ -24,6 +37,7 @@ export interface FlareSolverrResult {
   cookies: FlareSolverrCookie[]
   userAgent: string
   message?: string
+  response?: string
 }
 
 export interface SolveCloudflareChallengeOptions {
@@ -34,6 +48,24 @@ export interface SolveCloudflareChallengeOptions {
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000
 const DEFAULT_MAX_TIMEOUT_MS = 60_000
+
+function normalizeFlareSolverrCookie(raw: RawFlareSolverrCookie): FlareSolverrCookie {
+  return {
+    name: raw.name ?? "",
+    value: raw.value ?? "",
+    domain: raw.domain ?? "",
+    path: raw.path ?? "/",
+    expires:
+      typeof raw.expires === "number"
+        ? raw.expires
+        : typeof raw.expiry === "number"
+          ? raw.expiry
+          : -1,
+    httpOnly: raw.httpOnly ?? false,
+    secure: raw.secure ?? false,
+    sameSite: raw.sameSite ?? "Lax",
+  }
+}
 
 export async function solveCloudflareChallenge(
   serviceUrl: string,
@@ -78,7 +110,7 @@ export async function solveCloudflareChallenge(
       return null
     }
 
-    const cookies = data.solution?.cookies ?? []
+    const cookies = (data.solution?.cookies ?? []).map(normalizeFlareSolverrCookie)
     if (!cookies.length && !allowEmptyCookies) {
       log("求解成功但未返回 cookie")
       return null
@@ -94,6 +126,7 @@ export async function solveCloudflareChallenge(
       cookies,
       userAgent: data.solution?.userAgent ?? "",
       message: data.message,
+      response: data.solution?.response,
     }
   } catch (err) {
     log(`请求失败: ${err instanceof Error ? err.message : String(err)}`)

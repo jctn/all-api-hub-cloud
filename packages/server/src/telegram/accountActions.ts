@@ -2,8 +2,8 @@ import { CheckinResultStatus, type CheckinAccountResult } from "@all-api-hub/cor
 
 import type {
   BatchCheckinRunResult,
+  CheckinExecutionController,
 } from "../checkin/orchestrator.js"
-import type { CheckinExecutionController } from "../localWorker/hybridOrchestrator.js"
 
 function isAuthInvalidFailure(result: CheckinAccountResult | undefined): boolean {
   return (

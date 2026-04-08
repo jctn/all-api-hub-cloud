@@ -17,5 +17,3 @@ preload.cjs
 task.md
 tmp-import.json
 all-api-hub-backup-*.json
-packages/worker/.env
-packages/worker/.env.local

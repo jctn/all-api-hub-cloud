@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from "vitest"
 import { FileSystemRepository } from "@all-api-hub/core"
 import type { UserFromGetMe } from "grammy/types"
 
-import { InMemoryLocalWorkerTaskStore } from "../src/localWorker/taskStore.js"
 import { buildServer, type BuildServerOptions } from "../src/server.js"
 
 const tempDirectories: string[] = []
@@ -36,10 +35,8 @@ async function createServer(options: Partial<BuildServerOptions> = {}) {
   tempDirectories.push(directory)
 
   const repository = new FileSystemRepository(directory)
-  const localWorkerTaskStore = new InMemoryLocalWorkerTaskStore()
   const server = await buildServer({
     repository,
-    localWorkerTaskStore,
     config: {
       port: 3000,
       databaseUrl: "postgres://user:pass@localhost:5432/all_api_hub",
@@ -47,7 +44,6 @@ async function createServer(options: Partial<BuildServerOptions> = {}) {
       diagnosticsDirectory: path.join(directory, "diagnostics"),
       sharedSsoProfileDirectory: path.join(directory, "profiles", "cloud"),
       internalAdminToken: "internal-token",
-      localWorkerToken: "local-worker-token",
       telegram: {
         botToken: "123456:ABCDEF",
         webhookSecret: "tg-secret",
@@ -162,130 +158,5 @@ describe("server routes", () => {
     })
 
     expect(response.statusCode).toBe(401)
-  })
-
-  it("rejects worker task claim requests without the worker token", async () => {
-    const server = await createServer()
-    const response = await server.inject({
-      method: "POST",
-      url: "/internal/worker/tasks/claim",
-    })
-
-    expect(response.statusCode).toBe(401)
-  })
-
-  it("allows a local worker to claim, update and finish a task", async () => {
-    const server = await createServer()
-
-    const enqueueResponse = await server.inject({
-      method: "POST",
-      url: "/internal/worker/tasks/enqueue",
-      headers: {
-        authorization: "Bearer internal-token",
-      },
-      payload: {
-        kind: "checkin",
-        scope: "single",
-        requestedBy: "test",
-        chatId: "10001",
-        verbose: true,
-        payload: {
-          accountIds: ["account-1"],
-          accounts: [
-            {
-              id: "account-1",
-              siteName: "RunAnytime",
-              siteUrl: "https://runanytime.example.com",
-              siteType: "new-api",
-            },
-          ],
-        },
-      },
-    })
-
-    expect(enqueueResponse.statusCode).toBe(200)
-
-    const claimResponse = await server.inject({
-      method: "POST",
-      url: "/internal/worker/tasks/claim",
-      headers: {
-        authorization: "Bearer local-worker-token",
-      },
-      payload: {
-        workerId: "local-browser-1",
-      },
-    })
-
-    expect(claimResponse.statusCode).toBe(200)
-    expect(claimResponse.json()).toMatchObject({
-      ok: true,
-      task: {
-        status: "claimed",
-        workerId: "local-browser-1",
-        kind: "checkin",
-      },
-    })
-
-    const taskId = claimResponse.json().task.id as string
-
-    const progressResponse = await server.inject({
-      method: "POST",
-      url: `/internal/worker/tasks/${taskId}/progress`,
-      headers: {
-        authorization: "Bearer local-worker-token",
-      },
-      payload: {
-        workerId: "local-browser-1",
-        status: "running",
-        progressText: "浏览器已启动",
-        heartbeatAt: 123,
-      },
-    })
-
-    expect(progressResponse.statusCode).toBe(200)
-    expect(progressResponse.json()).toMatchObject({
-      ok: true,
-      task: {
-        id: taskId,
-        status: "running",
-        progressText: "浏览器已启动",
-      },
-    })
-
-    const finishResponse = await server.inject({
-      method: "POST",
-      url: `/internal/worker/tasks/${taskId}/finish`,
-      headers: {
-        authorization: "Bearer local-worker-token",
-      },
-      payload: {
-        workerId: "local-browser-1",
-        status: "succeeded",
-        finishedAt: 456,
-        resultJson: {
-          startedAt: 123,
-          completedAt: 456,
-          summary: {
-            total: 1,
-            success: 1,
-            alreadyChecked: 0,
-            failed: 0,
-            manualActionRequired: 0,
-            skipped: 0,
-          },
-          results: [],
-        },
-      },
-    })
-
-    expect(finishResponse.statusCode).toBe(200)
-    expect(finishResponse.json()).toMatchObject({
-      ok: true,
-      task: {
-        id: taskId,
-        status: "succeeded",
-        finishedAt: 456,
-      },
-    })
   })
 })

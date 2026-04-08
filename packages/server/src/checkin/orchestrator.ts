@@ -35,6 +35,16 @@ export interface BatchCheckinRunResult {
   refreshedAccountIds: string[]
 }
 
+export interface CheckinExecutionController {
+  runCheckinBatch(
+    options: BatchCheckinRunOptions,
+  ): Promise<BatchCheckinRunResult>
+  refreshSessions(
+    accountId?: string,
+    options?: SessionRefreshRunOptions,
+  ): Promise<SessionRefreshRunResult>
+}
+
 export interface BatchCheckinExecutionResult {
   targetAccountIds: string[] | null
   startedAt: number
