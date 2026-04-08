@@ -18,6 +18,10 @@ export interface GitHubImportSyncResult {
   result?: BackupImportResult
 }
 
+export interface GitHubImportSyncOptions {
+  force?: boolean
+}
+
 export class GitHubBackupImporter {
   constructor(
     private readonly repository: StorageRepository,
@@ -25,7 +29,9 @@ export class GitHubBackupImporter {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async syncFromRepo(): Promise<GitHubImportSyncResult> {
+  async syncFromRepo(
+    options: GitHubImportSyncOptions = {},
+  ): Promise<GitHubImportSyncResult> {
     const settings = await this.repository.getSettings()
     let sourceFile
     try {
@@ -38,6 +44,7 @@ export class GitHubBackupImporter {
     }
 
     if (
+      !options.force &&
       settings.lastImportedCommitSha &&
       settings.lastImportedCommitSha === sourceFile.sha
     ) {

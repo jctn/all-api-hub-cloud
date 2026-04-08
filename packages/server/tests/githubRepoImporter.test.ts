@@ -110,4 +110,62 @@ describe("GitHubBackupImporter", () => {
     expect(result.skipped).toBe(true)
     expect(result.importedAt).toBe(123)
   })
+
+  it("forces reimport when the sha is unchanged and force is enabled", async () => {
+    const repository = await createRepository()
+    await repository.saveSettings({
+      lastImportedCommitSha: "sha-1",
+      lastImportedAt: 123,
+    })
+
+    const importer = new GitHubBackupImporter(
+      repository,
+      {
+        owner: "owner",
+        name: "repo",
+        path: "accounts.json",
+        ref: "main",
+        githubPat: "pat",
+      },
+      async () =>
+        new Response(
+          JSON.stringify({
+            sha: "sha-1",
+            content: Buffer.from(
+              JSON.stringify({
+                accounts: [
+                  {
+                    id: "acc-2",
+                    site_name: "Forced Demo",
+                    site_url: "https://forced.example.com",
+                    site_type: "new-api",
+                    account_info: {
+                      id: 2,
+                      access_token: "token-2",
+                      username: "bob",
+                    },
+                    authType: "access_token",
+                    checkIn: {
+                      enableDetection: true,
+                    },
+                  },
+                ],
+              }),
+            ).toString("base64"),
+            encoding: "base64",
+          }),
+          { status: 200 },
+        ),
+    )
+
+    const result = await importer.syncFromRepo({ force: true })
+    const accounts = await repository.getAccounts()
+    const settings = await repository.getSettings()
+
+    expect(result.skipped).toBe(false)
+    expect(accounts).toHaveLength(1)
+    expect(accounts[0]?.id).toBe("acc-2")
+    expect(settings.lastImportedCommitSha).toBe("sha-1")
+    expect(settings.lastImportedAt).not.toBe(123)
+  })
 })

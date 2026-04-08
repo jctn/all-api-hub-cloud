@@ -9,7 +9,6 @@ import {
 } from "@all-api-hub/core"
 
 import type {
-  AccountSnapshotRefreshRunResult,
   BatchCheckinRunResult,
   SessionRefreshRunResult,
 } from "../checkin/orchestrator.js"
@@ -172,29 +171,6 @@ export function formatRefreshMessage(
   ]
 
   for (const item of result.results.filter((entry) => entry.status !== "refreshed").slice(0, 10)) {
-    lines.push(`- ${item.siteName}: ${truncateTelegramLine(item.message)}`)
-  }
-
-  return lines.join("\n")
-}
-
-export function formatAccountRefreshMessage(
-  result: AccountSnapshotRefreshRunResult,
-  timeZone: string,
-): string {
-  const lines = [
-    "账号数据刷新完成。",
-    `开始: ${formatTimestamp(result.startedAt, timeZone)}`,
-    `结束: ${formatTimestamp(result.completedAt, timeZone)}`,
-    `updated=${result.summary.updated} failed=${result.summary.failed} skipped=${result.summary.skipped}`,
-  ]
-
-  if (result.results.length === 0) {
-    lines.push("本次没有可执行的账号。")
-    return lines.join("\n")
-  }
-
-  for (const item of result.results.filter((entry) => entry.status !== "updated").slice(0, 10)) {
     lines.push(`- ${item.siteName}: ${truncateTelegramLine(item.message)}`)
   }
 

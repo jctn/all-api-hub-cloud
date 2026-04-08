@@ -7,7 +7,6 @@ import type { GitHubBackupImporter } from "../importing/githubRepoImporter.js"
 import type { CheckinExecutionController } from "../checkin/orchestrator.js"
 import { BusyTaskError, type TaskCoordinator } from "../taskCoordinator.js"
 import {
-  formatAccountRefreshMessage,
   formatAccountsMessage,
   formatCheckinMessage,
   formatImportMessage,
@@ -32,7 +31,7 @@ const TELEGRAM_COMMANDS = [
   { command: "checkin_all", description: "批量签到全部账号" },
   { command: "checkin", description: "单账号签到" },
   { command: "auth_refresh", description: "刷新账号会话" },
-  { command: "account_refresh", description: "刷新账号数据" },
+  { command: "account_refresh", description: "强制重载账号文件" },
   { command: "disable", description: "禁用账号" },
   { command: "enable", description: "启用账号" },
 ] as const
@@ -48,7 +47,7 @@ const TELEGRAM_HELP_LINES = [
   "/checkin_all [-log] — 批量签到全部可签到账号（-log 输出详细日志）",
   "/checkin <accountId|siteName> [-log] — 单账号签到（-log 输出详细日志）",
   "/auth_refresh <accountId|siteName|all> [-log] — 刷新账号会话（-log 输出详细日志）",
-  "/account_refresh <accountId|siteName|all> [-log] — 刷新账号数据（余额、配额、今日数据）",
+  "/account_refresh [all] [-log] — 强制重新导入 GitHub 账号备份文件",
   "/disable <accountId|siteName> — 禁用账号（不再签到和刷新）",
   "/enable <accountId|siteName> — 启用账号",
 ] as const
@@ -369,20 +368,9 @@ export async function createTelegramBot(params: {
     const input = ctx.match.trim()
     const verbose = input.includes("-log")
     const cleanInput = input.replace(/-log/gi, "").trim()
-    let accountId: string | undefined
-    let taskLabel = "all"
-
     if (cleanInput && cleanInput.toLowerCase() !== "all") {
-      const resolution = await handleAccountResolution(
-        chatId,
-        cleanInput,
-        "用法：/account_refresh <accountId|siteName|all> [-log]",
-      )
-      if (resolution.status !== "resolved") {
-        return
-      }
-      accountId = resolution.account.id
-      taskLabel = resolution.account.site_name
+      await sendText(chatId, "用法：/account_refresh [all] [-log]")
+      return
     }
 
     const verboseLog = verbose
@@ -390,38 +378,22 @@ export async function createTelegramBot(params: {
           diagnosticsDirectory: params.config.diagnosticsDirectory,
           timeZone: params.config.timeZone,
           kind: "account-refresh",
-          label: taskLabel,
+          label: "import",
         })
       : null
-    const progressReporter = verbose
-      ? async (text: string) => {
-          await verboseLog?.append(text)
-          await sendText(chatId, text)
-        }
-      : undefined
 
     if (verboseLog) {
       await sendText(chatId, `详细日志文件：${verboseLog.filePath}`)
-      await verboseLog.append(
-        accountId
-          ? `开始刷新账号数据：${taskLabel} (${accountId})`
-          : "开始刷新全部账号数据",
-      )
+      await verboseLog.append("开始强制重新导入 GitHub 账号备份文件")
     }
 
     await startTask(
-      "账号数据刷新任务",
+      "账号文件重载任务",
       "account_refresh",
-      accountId ? `刷新账号数据: ${accountId}` : "刷新全部账号数据",
-      () =>
-        params.orchestrator.refreshAccountSnapshots(accountId, {
-          onProgress: progressReporter,
-        }),
+      "强制重新导入 GitHub 账号 JSON",
+      () => params.importer.syncFromRepo({ force: true }),
       async (result) => {
-        const message = formatAccountRefreshMessage(
-          result,
-          params.config.timeZone,
-        )
+        const message = formatImportMessage(result, params.config.timeZone)
         await verboseLog?.append(message)
         return verboseLog ? `${message}\n日志文件：${verboseLog.filePath}` : message
       },
