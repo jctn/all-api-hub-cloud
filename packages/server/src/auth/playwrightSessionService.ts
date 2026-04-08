@@ -250,6 +250,7 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
         ),
       )
       page = context.pages()[0] ?? (await context.newPage())
+      await this.clearTargetSiteCloudflareCookies(context, account, options)
 
       if (initialPrewarmResult?.kind === "applied") {
         const prewarmResult = await this.applyLocalBrowserChallengePrewarm(
@@ -3138,6 +3139,53 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     }
   }
 
+  private async clearTargetSiteCloudflareCookies(
+    context: BrowserContext,
+    account: SiteAccount,
+    options: SessionRefreshOptions,
+  ): Promise<void> {
+    const browserContext = context as BrowserContext & {
+      cookies?: BrowserContext["cookies"]
+      clearCookies?: BrowserContext["clearCookies"]
+    }
+    if (
+      typeof browserContext.cookies !== "function" ||
+      typeof browserContext.clearCookies !== "function"
+    ) {
+      return
+    }
+
+    const targetHost = this.getUrlHostname(account.site_url)
+    if (!targetHost) {
+      return
+    }
+
+    const cookieDomains = Array.from(
+      new Set(
+        (await browserContext.cookies().catch(() => []))
+          .filter((cookie) =>
+            /^(__cf_bm|cf_clearance)$/i.test(cookie.name) &&
+            this.isSameOrSubdomain(
+              targetHost,
+              cookie.domain.replace(/^\./u, "").toLowerCase(),
+            ),
+          )
+          .map((cookie) => cookie.domain.replace(/^\./u, "").toLowerCase()),
+      ),
+    )
+
+    for (const domain of cookieDomains) {
+      await browserContext.clearCookies({
+        name: /^(__cf_bm|cf_clearance)$/i,
+        domain: new RegExp(`^\\.?${this.escapeRegex(domain)}$`, "iu"),
+      })
+      await this.reportProgress(
+        options,
+        `已清理目标站点残留 Cloudflare cookie：${domain}`,
+      )
+    }
+  }
+
   private buildLocalFlareSolverrUnavailableSessionResult(): SessionRefreshResult {
     return {
       status: "failed",
@@ -4400,6 +4448,10 @@ export class PlaywrightSiteSessionService implements SiteSessionRefresher {
     } catch {
       return ""
     }
+  }
+
+  private escapeRegex(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
   }
 
   private async captureDiagnostic(

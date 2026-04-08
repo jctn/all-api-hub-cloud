@@ -2145,8 +2145,13 @@ describe("PlaywrightSiteSessionService", () => {
       .mockResolvedValue(context as never)
 
     try {
+      const repository = {
+        async saveAccount() {
+          return undefined
+        },
+      }
       const service = new PlaywrightSiteSessionService(
-        {} as StorageRepository,
+        repository as StorageRepository,
         {
           ...baseConfig,
           browserHeadless: false,
@@ -4017,6 +4022,138 @@ describe("PlaywrightSiteSessionService", () => {
 
       expect(result?.status).toBe(CheckinResultStatus.Success)
       expect(completeLoginFlowCalled).toBe(true)
+    } finally {
+      launchSpy.mockRestore()
+    }
+  })
+
+  it("clears stale target-site cloudflare cookies before entering the local-browser refresh flow", async () => {
+    const page = {
+      url() {
+        return "https://api.ouu.ch/login"
+      },
+      async goto() {
+        return undefined
+      },
+      async screenshot() {
+        return undefined
+      },
+      async setExtraHTTPHeaders() {
+        return undefined
+      },
+    }
+
+    const clearCookies = vi.fn(async () => undefined)
+    const context = {
+      pages() {
+        return [page]
+      },
+      async newPage() {
+        return page
+      },
+      async close() {
+        return undefined
+      },
+      async addCookies() {
+        return undefined
+      },
+      async cookies() {
+        return [
+          {
+            name: "cf_clearance",
+            value: "stale-ouu-cf",
+            domain: ".ouu.ch",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+          },
+          {
+            name: "session",
+            value: "stale-ouu-session",
+            domain: "api.ouu.ch",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+          },
+          {
+            name: "cf_clearance",
+            value: "keep-linuxdo-cf",
+            domain: ".linux.do",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+          },
+        ]
+      },
+      clearCookies,
+    }
+
+    const launchSpy = vi
+      .spyOn(chromium, "launchPersistentContext")
+      .mockResolvedValue(context as never)
+
+    try {
+      const service = new PlaywrightSiteSessionService(
+        {} as StorageRepository,
+        {
+          ...baseConfig,
+          browserHeadless: false,
+          siteLoginProfiles: {
+            "api.ouu.ch": {
+              hostname: "api.ouu.ch",
+              loginPath: "/login",
+              loginButtonSelectors: ["button.login"],
+              successUrlPatterns: ["/console"],
+              tokenStorageKeys: ["access_token"],
+              postLoginSelectors: [],
+              executionMode: "local-browser",
+              localBrowser: {
+                manualFallbackPolicy: "disabled",
+                manualFallbackPolicyExplicit: true,
+              },
+            },
+          },
+        },
+      )
+
+      ;(
+        service as unknown as {
+          completeLoginFlow: () => Promise<{ status: "ready"; page: typeof page }>
+          captureAuthenticatedAccount: () => Promise<SiteAccount>
+        }
+      ).completeLoginFlow = async () => ({ status: "ready", page })
+      ;(
+        service as unknown as {
+          captureAuthenticatedAccount: () => Promise<SiteAccount>
+        }
+      ).captureAuthenticatedAccount = async () => ({
+        ...baseAccount,
+        id: "acc-ouu",
+        site_name: "OuuAPI",
+        site_url: "https://api.ouu.ch",
+      })
+
+      await service.refreshSiteSession(
+        {
+          ...baseAccount,
+          id: "acc-ouu",
+          site_name: "OuuAPI",
+          site_url: "https://api.ouu.ch",
+        },
+        {},
+      )
+
+      expect(clearCookies).toHaveBeenCalledTimes(1)
+      expect(clearCookies).toHaveBeenCalledWith({
+        name: /^(__cf_bm|cf_clearance)$/i,
+        domain: /^\.?ouu\.ch$/iu,
+      })
     } finally {
       launchSpy.mockRestore()
     }
